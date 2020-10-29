@@ -3,8 +3,11 @@ extern crate sdl2;
 
 use crate::vk_initializers;
 
-use ash::extensions::khr::Swapchain;
-use ash::version::DeviceV1_0;
+use ash::extensions::{
+    ext::DebugUtils,
+    khr::{Surface, Swapchain},
+};
+use ash::version::{DeviceV1_0, InstanceV1_0};
 use ash::{vk, Device, Instance};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
@@ -37,7 +40,7 @@ impl VkPipelineBuilder {
         };
     }
 
-    pub fn build_pipline(&self, renderpass: &vk::RenderPass, device: &Device) -> vk::Pipeline {
+    pub fn build_pipline(&self, render_pass: &vk::RenderPass, device: &Device) -> vk::Pipeline {
         let viewport_state_create_info = vk::PipelineViewportStateCreateInfo::builder()
             .viewports(&[self.viewport])
             .scissors(&[self.scissor])
@@ -58,7 +61,7 @@ impl VkPipelineBuilder {
             .multisample_state(&self.multisampling)
             .color_blend_state(&color_blend_state_create_info)
             .layout(self.pipeline_layout)
-            .render_pass(*renderpass)
+            .render_pass(*render_pass)
             .subpass(0)
             .base_pipeline_handle(vk::Pipeline::null())
             .build();
@@ -78,7 +81,10 @@ pub struct VkEngine {
     size: vk::Extent2D,
     frame_count: u32,
     instance: Instance,
+    debug_utils_loader: DebugUtils,
+    debug_callback: vk::DebugUtilsMessengerEXT,
     surface: vk::SurfaceKHR,
+    surface_loader: Surface,
     physical_device: vk::PhysicalDevice,
     device: Device,
     swapchain_loader: Swapchain,
@@ -86,7 +92,7 @@ pub struct VkEngine {
     swapchain_image_format: vk::Format,
     swapchain_images: Vec<vk::Image>,
     swapchain_image_views: Vec<vk::ImageView>,
-    renderpass: vk::RenderPass,
+    render_pass: vk::RenderPass,
     framebuffers: Vec<vk::Framebuffer>,
     graphics_queue: vk::Queue,
     graphics_queue_family_index: u32,
@@ -95,6 +101,8 @@ pub struct VkEngine {
     render_fence: vk::Fence,
     present_semaphore: vk::Semaphore,
     render_semaphore: vk::Semaphore,
+    triangle_vertex_shader_module: vk::ShaderModule,
+    triangle_fragment_shader_module: vk::ShaderModule,
     triangle_pipeline_layout: vk::PipelineLayout,
     triangle_pipeline: vk::Pipeline,
 }
@@ -105,7 +113,8 @@ impl VkEngine {
 
         let (entry, instance) = vk_initializers::create_instance(&window);
 
-        vk_initializers::create_debug_layer(&entry, &instance);
+        let (debug_utils_loader, debug_callback) =
+            vk_initializers::create_debug_layer(&entry, &instance);
 
         let (surface, surface_loader) = vk_initializers::create_surface(&window, &entry, &instance);
 
@@ -143,11 +152,11 @@ impl VkEngine {
             &device,
         );
 
-        let renderpass = vk_initializers::create_renderpass(&surface_format, &device);
+        let render_pass = vk_initializers::create_renderpass(&surface_format, &device);
 
         let framebuffers = vk_initializers::create_framebuffers(
             &swapchain_image_views,
-            &renderpass,
+            &render_pass,
             width,
             height,
             &device,
@@ -181,7 +190,7 @@ impl VkEngine {
                 .unwrap()
         };
 
-        let (vertex_shader_module, fragment_shader_module) =
+        let (triangle_vertex_shader_module, triangle_fragment_shader_module) =
             vk_initializers::create_vertex_and_fragment_shader_modules(&device);
 
         let mut pipeline_builder = VkPipelineBuilder::default();
@@ -190,13 +199,15 @@ impl VkEngine {
             .shader_stages
             .push(vk_initializers::pipeline_shader_stage_create_info(
                 vk::ShaderStageFlags::VERTEX,
-                vertex_shader_module,
+                triangle_vertex_shader_module,
+                "VSMain\0",
             ));
         pipeline_builder
             .shader_stages
             .push(vk_initializers::pipeline_shader_stage_create_info(
                 vk::ShaderStageFlags::FRAGMENT,
-                fragment_shader_module,
+                triangle_fragment_shader_module,
+                "FSMain\0",
             ));
 
         pipeline_builder.vertex_input_info = vk_initializers::vertex_input_state_create_info();
@@ -230,7 +241,7 @@ impl VkEngine {
 
         pipeline_builder.pipeline_layout = triangle_pipeline_layout;
 
-        let triangle_pipeline = pipeline_builder.build_pipline(&renderpass, &device);
+        let triangle_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
 
         return VkEngine {
             sdl_context: sdl_context,
@@ -238,7 +249,10 @@ impl VkEngine {
             size: vk::Extent2D { width, height },
             frame_count: 0,
             instance: instance,
+            debug_utils_loader: debug_utils_loader,
+            debug_callback: debug_callback,
             surface: surface,
+            surface_loader: surface_loader,
             physical_device: physical_device,
             device: device,
             swapchain_loader: swapchain_loader,
@@ -246,7 +260,7 @@ impl VkEngine {
             swapchain_image_format: surface_format.format,
             swapchain_images: swapchain_images,
             swapchain_image_views: swapchain_image_views,
-            renderpass: renderpass,
+            render_pass: render_pass,
             framebuffers: framebuffers,
             graphics_queue: graphics_queue,
             graphics_queue_family_index: queue_family_index,
@@ -255,13 +269,51 @@ impl VkEngine {
             render_fence: render_fence,
             render_semaphore: render_semaphore,
             present_semaphore: present_semaphore,
+            triangle_vertex_shader_module: triangle_vertex_shader_module,
+            triangle_fragment_shader_module: triangle_fragment_shader_module,
             triangle_pipeline_layout: triangle_pipeline_layout,
             triangle_pipeline: triangle_pipeline,
         };
     }
 
     pub fn cleanup(&mut self) {
-        todo!()
+        unsafe {
+            self.device.device_wait_idle().unwrap();
+
+            self.device
+                .destroy_shader_module(self.triangle_vertex_shader_module, None);
+            self.device
+                .destroy_shader_module(self.triangle_fragment_shader_module, None);
+
+            self.device.destroy_semaphore(self.present_semaphore, None);
+            self.device.destroy_semaphore(self.render_semaphore, None);
+            self.device.destroy_fence(self.render_fence, None);
+
+            self.device.destroy_command_pool(self.command_pool, None);
+
+            for &framebuffer in self.framebuffers.iter() {
+                self.device.destroy_framebuffer(framebuffer, None);
+            }
+
+            self.device.destroy_pipeline(self.triangle_pipeline, None);
+            self.device
+                .destroy_pipeline_layout(self.triangle_pipeline_layout, None);
+            self.device.destroy_render_pass(self.render_pass, None);
+
+            for &image_view in self.swapchain_image_views.iter() {
+                self.device.destroy_image_view(image_view, None);
+            }
+
+            self.swapchain_loader
+                .destroy_swapchain(self.swapchain, None);
+            self.device.destroy_device(None);
+            self.surface_loader.destroy_surface(self.surface, None);
+
+            self.debug_utils_loader
+                .destroy_debug_utils_messenger(self.debug_callback, None);
+
+            self.instance.destroy_instance(None);
+        };
     }
 
     pub fn draw(&mut self) {
@@ -307,7 +359,7 @@ impl VkEngine {
         };
 
         let renderpass_begin_info = vk::RenderPassBeginInfo::builder()
-            .render_pass(self.renderpass)
+            .render_pass(self.render_pass)
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent: self.size,

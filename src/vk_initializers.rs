@@ -92,7 +92,10 @@ unsafe extern "system" fn vulkan_debug_callback(
     vk::FALSE
 }
 
-pub fn create_debug_layer(entry: &Entry, instance: &Instance) {
+pub fn create_debug_layer(
+    entry: &Entry,
+    instance: &Instance,
+) -> (DebugUtils, vk::DebugUtilsMessengerEXT) {
     let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
         .message_severity(
             vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
@@ -103,11 +106,13 @@ pub fn create_debug_layer(entry: &Entry, instance: &Instance) {
         .pfn_user_callback(Some(vulkan_debug_callback));
 
     let debug_utils_loader = DebugUtils::new(entry, instance);
-    let debug_call_back = unsafe {
+    let debug_callback = unsafe {
         debug_utils_loader
             .create_debug_utils_messenger(&debug_info, None)
             .unwrap()
     };
+
+    return (debug_utils_loader, debug_callback);
 }
 
 pub fn create_surface(
@@ -333,7 +338,7 @@ pub fn create_renderpass(surface_format: &vk::SurfaceFormatKHR, device: &Device)
 
 pub fn create_framebuffers(
     swapchain_image_views: &Vec<vk::ImageView>,
-    renderpass: &vk::RenderPass,
+    render_pass: &vk::RenderPass,
     width: u32,
     height: u32,
     device: &Device,
@@ -342,7 +347,7 @@ pub fn create_framebuffers(
         .iter()
         .map(|&image| {
             let framebuffer_create_info = vk::FramebufferCreateInfo::builder()
-                .render_pass(*renderpass)
+                .render_pass(*render_pass)
                 .attachments(&[image])
                 .width(width)
                 .height(height)
@@ -388,21 +393,12 @@ pub fn create_command_pool_and_buffer(
 pub fn create_vertex_and_fragment_shader_modules(
     device: &Device,
 ) -> (vk::ShaderModule, vk::ShaderModule) {
-    let mut shader_compiler = shaderc::Compiler::new().unwrap();
-
-    let vertex_shader_source = std::fs::read_to_string("shaders/triangle.vert").unwrap();
-    let vertex_shader_binary = shader_compiler
-        .compile_into_spirv(
-            vertex_shader_source.as_str(),
-            shaderc::ShaderKind::Vertex,
-            "triangle.vert",
-            "main",
-            None,
-        )
-        .unwrap();
+    let vertex_shader_binary_as_bytes = std::fs::read("shaders/triangle.vert.spv").unwrap();
+    // !Note: This might bite me later due to endianess.
+    let (_, vertex_shader_binary, _) = unsafe { vertex_shader_binary_as_bytes.align_to::<u32>() };
 
     let vertex_shader_module_create_info = vk::ShaderModuleCreateInfo::builder()
-        .code(vertex_shader_binary.as_binary())
+        .code(vertex_shader_binary)
         .build();
     let vertex_shader_module = unsafe {
         device
@@ -410,19 +406,13 @@ pub fn create_vertex_and_fragment_shader_modules(
             .unwrap()
     };
 
-    let fragment_shader_source = std::fs::read_to_string("shaders/triangle.frag").unwrap();
-    let fragment_shader_binary = shader_compiler
-        .compile_into_spirv(
-            fragment_shader_source.as_str(),
-            shaderc::ShaderKind::Fragment,
-            "triangle.frag",
-            "main",
-            None,
-        )
-        .unwrap();
+    let fragment_shader_binary_as_bytes = std::fs::read("shaders/triangle.frag.spv").unwrap();
+    // !Note: This might bite me later due to endianess.
+    let (_, fragment_shader_binary, _) =
+        unsafe { fragment_shader_binary_as_bytes.align_to::<u32>() };
 
     let fragment_shader_module_create_info = vk::ShaderModuleCreateInfo::builder()
-        .code(fragment_shader_binary.as_binary())
+        .code(fragment_shader_binary)
         .build();
     let fragment_shader_module = unsafe {
         device
@@ -436,11 +426,12 @@ pub fn create_vertex_and_fragment_shader_modules(
 pub fn pipeline_shader_stage_create_info(
     shader_stage: vk::ShaderStageFlags,
     shader_module: vk::ShaderModule,
+    entry_point: &str,
 ) -> vk::PipelineShaderStageCreateInfo {
     return vk::PipelineShaderStageCreateInfo::builder()
         .stage(shader_stage)
         .module(shader_module)
-        .name(CStr::from_bytes_with_nul("main\0".as_bytes()).unwrap())
+        .name(CStr::from_bytes_with_nul(entry_point.as_bytes()).unwrap())
         .build();
 }
 

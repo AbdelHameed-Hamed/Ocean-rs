@@ -9,5 +9,3 @@ edition = "2018"
 [dependencies]
 sdl2 = ""
 ash = ""
-shaderc = ""
-imgui-rs = ""
