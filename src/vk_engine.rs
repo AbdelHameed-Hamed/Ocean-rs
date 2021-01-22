@@ -200,14 +200,14 @@ impl VkEngine {
             .push(vk_initializers::pipeline_shader_stage_create_info(
                 vk::ShaderStageFlags::VERTEX,
                 triangle_vertex_shader_module,
-                "VSMain\0",
+                "vs_main\0",
             ));
         pipeline_builder
             .shader_stages
             .push(vk_initializers::pipeline_shader_stage_create_info(
                 vk::ShaderStageFlags::FRAGMENT,
                 triangle_fragment_shader_module,
-                "FSMain\0",
+                "fs_main\0",
             ));
 
         pipeline_builder.vertex_input_info = vk_initializers::vertex_input_state_create_info();

@@ -1,11 +1,9 @@
-struct VSOut
-{
+struct VSOut {
     float4 position : SV_POSITION;
     float4 color : COLOR;
 };
 
-VSOut VSMain(uint vertex_id: SV_VERTEXID)
-{
+VSOut vs_main(uint vertex_id: SV_VERTEXID) {
     // just pass vertex position straight through
     const float3 positions[3] = {
         float3( 1.f, 1.f, 0.0f),
@@ -26,7 +24,8 @@ VSOut VSMain(uint vertex_id: SV_VERTEXID)
     return output;
 }
 
-float4 FSMain(VSOut input) : SV_TARGET
-{
+float4 fs_main(VSOut input) : SV_TARGET {
     return input.color;
 }
+
+struct T {};
