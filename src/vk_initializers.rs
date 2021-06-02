@@ -34,7 +34,7 @@ pub fn create_instance(window: &Window) -> (Entry, Instance) {
         .collect::<Vec<_>>();
     extension_names_raw.push(DebugUtils::name().as_ptr());
 
-    let entry = Entry::new().unwrap();
+    let entry = unsafe { Entry::new().unwrap() };
 
     let layer_names = [CString::new("VK_LAYER_KHRONOS_validation").unwrap()];
     let layer_names_raw: Vec<*const i8> = layer_names

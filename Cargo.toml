@@ -8,4 +8,4 @@ edition = "2018"
 
 [dependencies]
 sdl2 = "0.34.3"
-ash = ""
+ash = "0.32.1"
