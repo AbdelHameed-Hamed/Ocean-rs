@@ -140,11 +140,11 @@ pub fn get_physical_device_and_graphics_queue_family_index(
         physical_devices
             .iter()
             .map(|physical_device| {
-                instance
+                return instance
                     .get_physical_device_queue_family_properties(*physical_device)
                     .iter()
                     .enumerate()
-                    .filter_map(|(index, ref info)| {
+                    .find_map(|(index, ref info)| {
                         let supports_graphic_and_surface =
                             info.queue_flags.contains(vk::QueueFlags::GRAPHICS)
                                 && surface_loader
@@ -159,11 +159,9 @@ pub fn get_physical_device_and_graphics_queue_family_index(
                         } else {
                             None
                         }
-                    })
-                    .next()
+                    });
             })
-            .filter_map(|v| v)
-            .next()
+            .find_map(|v| v)
             .unwrap()
     };
 

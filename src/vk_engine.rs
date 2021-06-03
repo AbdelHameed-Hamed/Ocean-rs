@@ -1,6 +1,7 @@
 extern crate ash;
 extern crate sdl2;
 
+use crate::math::Vec3;
 use crate::vk_initializers;
 
 use ash::extensions::{
@@ -12,6 +13,79 @@ use ash::{vk, Device, Instance};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::video::Window;
+use std::ffi::c_void;
+use std::mem::size_of;
+
+struct Vertex {
+    pos: Vec3,
+    col: Vec3,
+}
+
+const VERTECIES: [Vertex; 3] = [
+    Vertex {
+        pos: Vec3 {
+            x: 0.0f32,
+            y: -0.5f32,
+            z: 0.0f32,
+        },
+        col: Vec3 {
+            x: 1.0f32,
+            y: 0.0f32,
+            z: 0.0f32,
+        },
+    },
+    Vertex {
+        pos: Vec3 {
+            x: 0.5f32,
+            y: 0.5f32,
+            z: 0.0f32,
+        },
+        col: Vec3 {
+            x: 0.0f32,
+            y: 1.0f32,
+            z: 0.0f32,
+        },
+    },
+    Vertex {
+        pos: Vec3 {
+            x: -0.5f32,
+            y: 0.5f32,
+            z: 0.0f32,
+        },
+        col: Vec3 {
+            x: 0.0f32,
+            y: 0.0f32,
+            z: 1.0f32,
+        },
+    },
+];
+
+impl Vertex {
+    pub fn get_binding_description() -> vk::VertexInputBindingDescription {
+        return vk::VertexInputBindingDescription::builder()
+            .binding(0)
+            .stride(size_of::<Vertex>() as u32)
+            .input_rate(vk::VertexInputRate::VERTEX)
+            .build();
+    }
+
+    pub fn get_attribute_description() -> [vk::VertexInputAttributeDescription; 2] {
+        return [
+            vk::VertexInputAttributeDescription::builder()
+                .binding(0)
+                .location(0)
+                .format(vk::Format::R32G32B32_SFLOAT)
+                .offset(0)
+                .build(),
+            vk::VertexInputAttributeDescription::builder()
+                .binding(0)
+                .location(1)
+                .format(vk::Format::R32G32B32_SFLOAT)
+                .offset(size_of::<Vec3>() as u32)
+                .build(),
+        ];
+    }
+}
 
 struct VkPipelineBuilder {
     shader_stages: Vec<vk::PipelineShaderStageCreateInfo>,
@@ -29,7 +103,10 @@ impl VkPipelineBuilder {
     pub fn default() -> VkPipelineBuilder {
         return VkPipelineBuilder {
             shader_stages: Vec::<vk::PipelineShaderStageCreateInfo>::default(),
-            vertex_input_info: vk::PipelineVertexInputStateCreateInfo::default(),
+            vertex_input_info: vk::PipelineVertexInputStateCreateInfo::builder()
+                .vertex_binding_descriptions(&[Vertex::get_binding_description()])
+                .vertex_attribute_descriptions(&Vertex::get_attribute_description())
+                .build(),
             input_assembly: vk::PipelineInputAssemblyStateCreateInfo::default(),
             viewport: vk::Viewport::default(),
             scissor: vk::Rect2D::default(),
@@ -54,7 +131,12 @@ impl VkPipelineBuilder {
 
         let pipeline_create_info = vk::GraphicsPipelineCreateInfo::builder()
             .stages(self.shader_stages.as_slice())
-            .vertex_input_state(&self.vertex_input_info)
+            .vertex_input_state(
+                &vk::PipelineVertexInputStateCreateInfo::builder()
+                    .vertex_binding_descriptions(&[Vertex::get_binding_description()])
+                    .vertex_attribute_descriptions(&Vertex::get_attribute_description())
+                    .build(),
+            )
             .input_assembly_state(&self.input_assembly)
             .viewport_state(&viewport_state_create_info)
             .rasterization_state(&self.rasterizer)
@@ -105,6 +187,8 @@ pub struct VkEngine {
     triangle_fragment_shader_module: vk::ShaderModule,
     triangle_pipeline_layout: vk::PipelineLayout,
     triangle_pipeline: vk::Pipeline,
+    vertex_buffer: vk::Buffer,
+    vertex_buffer_memory: vk::DeviceMemory,
 }
 
 impl VkEngine {
@@ -243,77 +327,135 @@ impl VkEngine {
 
         let triangle_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
 
+        let buffer_create_info = vk::BufferCreateInfo::builder()
+            .size((size_of::<Vertex>() * VERTECIES.len()) as u64)
+            .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .build();
+        let vertex_buffer = unsafe { device.create_buffer(&buffer_create_info, None).unwrap() };
+
+        let memory_requirements = unsafe { device.get_buffer_memory_requirements(vertex_buffer) };
+        let memory_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+        let required_memory_flags =
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        for (i, memory_type) in memory_properties.memory_types.iter().enumerate() {
+            if (memory_requirements.memory_type_bits & (1 << i)) > 0
+                && memory_type.property_flags.contains(required_memory_flags)
+            {
+                i as u32;
+            }
+        }
+        let memory_type = memory_properties
+            .memory_types
+            .iter()
+            .enumerate()
+            .find_map(|(i, memory_type)| {
+                if (memory_requirements.memory_type_bits & (1 << i)) > 0
+                    && memory_type.property_flags.contains(required_memory_flags)
+                {
+                    return Some(i as u32);
+                } else {
+                    return None;
+                }
+            })
+            .unwrap();
+
+        let memory_allocate_info = vk::MemoryAllocateInfo::builder()
+            .allocation_size(memory_requirements.size)
+            .memory_type_index(memory_type)
+            .build();
+        let vertex_buffer_memory =
+            unsafe { device.allocate_memory(&memory_allocate_info, None).unwrap() };
+        unsafe {
+            device
+                .bind_buffer_memory(vertex_buffer, vertex_buffer_memory, 0)
+                .unwrap();
+            let vertex_data_ptr = device
+                .map_memory(
+                    vertex_buffer_memory,
+                    0,
+                    buffer_create_info.size,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .unwrap() as *mut Vertex;
+            vertex_data_ptr.copy_from_nonoverlapping(VERTECIES.as_ptr(), VERTECIES.len());
+            device.unmap_memory(vertex_buffer_memory);
+        };
+
         return VkEngine {
-            sdl_context: sdl_context,
-            window: window,
+            sdl_context,
+            window,
             size: vk::Extent2D { width, height },
             frame_count: 0,
-            instance: instance,
-            debug_utils_loader: debug_utils_loader,
-            debug_callback: debug_callback,
-            surface: surface,
-            surface_loader: surface_loader,
-            physical_device: physical_device,
-            device: device,
-            swapchain_loader: swapchain_loader,
-            swapchain: swapchain,
+            instance,
+            debug_utils_loader,
+            debug_callback,
+            surface,
+            surface_loader,
+            physical_device,
+            device,
+            swapchain_loader,
+            swapchain,
             swapchain_image_format: surface_format.format,
-            swapchain_images: swapchain_images,
-            swapchain_image_views: swapchain_image_views,
-            render_pass: render_pass,
-            framebuffers: framebuffers,
-            graphics_queue: graphics_queue,
+            swapchain_images,
+            swapchain_image_views,
+            render_pass,
+            framebuffers,
+            graphics_queue,
             graphics_queue_family_index: queue_family_index,
-            command_pool: command_pool,
+            command_pool,
             command_buffer: command_buffers[0], // Should probably do something about this.
-            render_fence: render_fence,
-            render_semaphore: render_semaphore,
-            present_semaphore: present_semaphore,
-            triangle_vertex_shader_module: triangle_vertex_shader_module,
-            triangle_fragment_shader_module: triangle_fragment_shader_module,
-            triangle_pipeline_layout: triangle_pipeline_layout,
-            triangle_pipeline: triangle_pipeline,
+            render_fence,
+            render_semaphore,
+            present_semaphore,
+            triangle_vertex_shader_module,
+            triangle_fragment_shader_module,
+            triangle_pipeline_layout,
+            triangle_pipeline,
+            vertex_buffer,
+            vertex_buffer_memory,
         };
     }
 
-    pub fn cleanup(&mut self) {
-        unsafe {
-            self.device.device_wait_idle().unwrap();
+    pub unsafe fn cleanup(&mut self) {
+        self.device.device_wait_idle().unwrap();
 
-            self.device
-                .destroy_shader_module(self.triangle_vertex_shader_module, None);
-            self.device
-                .destroy_shader_module(self.triangle_fragment_shader_module, None);
+        self.device
+            .destroy_shader_module(self.triangle_vertex_shader_module, None);
+        self.device
+            .destroy_shader_module(self.triangle_fragment_shader_module, None);
 
-            self.device.destroy_semaphore(self.present_semaphore, None);
-            self.device.destroy_semaphore(self.render_semaphore, None);
-            self.device.destroy_fence(self.render_fence, None);
+        self.device.destroy_semaphore(self.present_semaphore, None);
+        self.device.destroy_semaphore(self.render_semaphore, None);
+        self.device.destroy_fence(self.render_fence, None);
 
-            self.device.destroy_command_pool(self.command_pool, None);
+        self.device.destroy_command_pool(self.command_pool, None);
 
-            for &framebuffer in self.framebuffers.iter() {
-                self.device.destroy_framebuffer(framebuffer, None);
-            }
+        for &framebuffer in self.framebuffers.iter() {
+            self.device.destroy_framebuffer(framebuffer, None);
+        }
 
-            self.device.destroy_pipeline(self.triangle_pipeline, None);
-            self.device
-                .destroy_pipeline_layout(self.triangle_pipeline_layout, None);
-            self.device.destroy_render_pass(self.render_pass, None);
+        self.device.destroy_pipeline(self.triangle_pipeline, None);
+        self.device
+            .destroy_pipeline_layout(self.triangle_pipeline_layout, None);
+        self.device.destroy_render_pass(self.render_pass, None);
 
-            for &image_view in self.swapchain_image_views.iter() {
-                self.device.destroy_image_view(image_view, None);
-            }
+        for &image_view in self.swapchain_image_views.iter() {
+            self.device.destroy_image_view(image_view, None);
+        }
 
-            self.swapchain_loader
-                .destroy_swapchain(self.swapchain, None);
-            self.device.destroy_device(None);
-            self.surface_loader.destroy_surface(self.surface, None);
+        self.swapchain_loader
+            .destroy_swapchain(self.swapchain, None);
+        self.device.destroy_buffer(self.vertex_buffer, None);
+        self.device.free_memory(self.vertex_buffer_memory, None);
+        self.device.destroy_device(None);
+        self.surface_loader.destroy_surface(self.surface, None);
 
-            self.debug_utils_loader
-                .destroy_debug_utils_messenger(self.debug_callback, None);
+        self.debug_utils_loader
+            .destroy_debug_utils_messenger(self.debug_callback, None);
 
-            self.instance.destroy_instance(None);
-        };
+        self.instance.destroy_instance(None);
     }
 
     pub fn draw(&mut self) {
@@ -378,7 +520,14 @@ impl VkEngine {
                 vk::PipelineBindPoint::GRAPHICS,
                 self.triangle_pipeline,
             );
-            self.device.cmd_draw(self.command_buffer, 3, 1, 0, 0);
+            self.device.cmd_bind_vertex_buffers(
+                self.command_buffer,
+                0,
+                &[self.vertex_buffer],
+                &[0],
+            );
+            self.device
+                .cmd_draw(self.command_buffer, VERTECIES.len() as u32, 1, 0, 0);
             self.device.cmd_end_render_pass(self.command_buffer);
             self.device.end_command_buffer(self.command_buffer).unwrap();
         };

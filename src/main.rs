@@ -1,3 +1,4 @@
+mod math;
 mod vk_engine;
 mod vk_initializers;
 
@@ -6,5 +7,7 @@ fn main() {
 
     engine.run();
 
-    engine.cleanup();
+    unsafe {
+        engine.cleanup();
+    };
 }
