@@ -89,7 +89,7 @@ unsafe extern "system" fn vulkan_debug_callback(
         message,
     );
 
-    vk::FALSE
+    return vk::FALSE;
 }
 
 pub fn create_debug_layer(
@@ -490,4 +490,98 @@ pub fn color_blend_attachment_state() -> vk::PipelineColorBlendAttachmentState {
 
 pub fn pipeline_layout_create_info() -> vk::PipelineLayoutCreateInfo {
     return vk::PipelineLayoutCreateInfo::default();
+}
+
+pub fn create_buffer(
+    instance: &Instance,
+    physical_device: vk::PhysicalDevice,
+    device: &Device,
+    size: vk::DeviceSize,
+    usage: vk::BufferUsageFlags,
+    properties: vk::MemoryPropertyFlags,
+) -> (vk::Buffer, vk::DeviceMemory) {
+    let buffer_create_info = vk::BufferCreateInfo::builder()
+        .size(size)
+        .usage(usage)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .build();
+    let buffer = unsafe { device.create_buffer(&buffer_create_info, None).unwrap() };
+
+    let memory_properties =
+        unsafe { instance.get_physical_device_memory_properties(physical_device) };
+    let memory_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+    let memory_type = memory_properties
+        .memory_types
+        .iter()
+        .enumerate()
+        .find_map(|(i, memory_type)| {
+            if (memory_requirements.memory_type_bits & (1 << i)) > 0
+                && memory_type.property_flags.contains(properties)
+            {
+                return Some(i as u32);
+            } else {
+                return None;
+            }
+        })
+        .unwrap();
+
+    let memory_allocate_info = vk::MemoryAllocateInfo::builder()
+        .allocation_size(memory_requirements.size)
+        .memory_type_index(memory_type)
+        .build();
+    let buffer_memory = unsafe { device.allocate_memory(&memory_allocate_info, None).unwrap() };
+
+    unsafe { device.bind_buffer_memory(buffer, buffer_memory, 0).unwrap() };
+
+    return (buffer, buffer_memory);
+}
+
+pub fn copy_buffer(
+    device: &Device,
+    command_pool: vk::CommandPool,
+    graphics_queue: vk::Queue,
+    src: vk::Buffer,
+    dst: vk::Buffer,
+    size: vk::DeviceSize,
+) {
+    let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::builder()
+        .command_pool(command_pool)
+        .command_buffer_count(1)
+        .build();
+    let command_buffer = unsafe {
+        device
+            .allocate_command_buffers(&command_buffer_allocate_info)
+            .unwrap()[0]
+    };
+
+    let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder()
+        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+        .build();
+    unsafe {
+        device
+            .begin_command_buffer(command_buffer, &command_buffer_begin_info)
+            .unwrap()
+    };
+
+    let buffer_copy_region = vk::BufferCopy::builder()
+        .src_offset(0)
+        .dst_offset(0)
+        .size(size)
+        .build();
+    unsafe {
+        device.cmd_copy_buffer(command_buffer, src, dst, &[buffer_copy_region]);
+        device.end_command_buffer(command_buffer).unwrap();
+    };
+
+    let submit_info = vk::SubmitInfo::builder()
+        .command_buffers(&[command_buffer])
+        .build();
+
+    unsafe {
+        device
+            .queue_submit(graphics_queue, &[submit_info], vk::Fence::null())
+            .unwrap();
+        device.queue_wait_idle(graphics_queue).unwrap();
+        device.free_command_buffers(command_pool, &[command_buffer]);
+    };
 }

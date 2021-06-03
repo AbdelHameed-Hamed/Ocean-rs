@@ -13,7 +13,6 @@ use ash::{vk, Device, Instance};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::video::Window;
-use std::ffi::c_void;
 use std::mem::size_of;
 
 struct Vertex {
@@ -327,60 +326,50 @@ impl VkEngine {
 
         let triangle_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
 
-        let buffer_create_info = vk::BufferCreateInfo::builder()
-            .size((size_of::<Vertex>() * VERTECIES.len()) as u64)
-            .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .build();
-        let vertex_buffer = unsafe { device.create_buffer(&buffer_create_info, None).unwrap() };
+        let buffer_size = (size_of::<Vertex>() * VERTECIES.len()) as u64;
 
-        let memory_requirements = unsafe { device.get_buffer_memory_requirements(vertex_buffer) };
-        let memory_properties =
-            unsafe { instance.get_physical_device_memory_properties(physical_device) };
-        let required_memory_flags =
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-        for (i, memory_type) in memory_properties.memory_types.iter().enumerate() {
-            if (memory_requirements.memory_type_bits & (1 << i)) > 0
-                && memory_type.property_flags.contains(required_memory_flags)
-            {
-                i as u32;
-            }
-        }
-        let memory_type = memory_properties
-            .memory_types
-            .iter()
-            .enumerate()
-            .find_map(|(i, memory_type)| {
-                if (memory_requirements.memory_type_bits & (1 << i)) > 0
-                    && memory_type.property_flags.contains(required_memory_flags)
-                {
-                    return Some(i as u32);
-                } else {
-                    return None;
-                }
-            })
-            .unwrap();
+        let (staging_buffer, staging_buffer_memory) = vk_initializers::create_buffer(
+            &instance,
+            physical_device,
+            &device,
+            buffer_size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        );
 
-        let memory_allocate_info = vk::MemoryAllocateInfo::builder()
-            .allocation_size(memory_requirements.size)
-            .memory_type_index(memory_type)
-            .build();
-        let vertex_buffer_memory =
-            unsafe { device.allocate_memory(&memory_allocate_info, None).unwrap() };
         unsafe {
-            device
-                .bind_buffer_memory(vertex_buffer, vertex_buffer_memory, 0)
-                .unwrap();
             let vertex_data_ptr = device
                 .map_memory(
-                    vertex_buffer_memory,
+                    staging_buffer_memory,
                     0,
-                    buffer_create_info.size,
+                    buffer_size,
                     vk::MemoryMapFlags::empty(),
                 )
                 .unwrap() as *mut Vertex;
             vertex_data_ptr.copy_from_nonoverlapping(VERTECIES.as_ptr(), VERTECIES.len());
-            device.unmap_memory(vertex_buffer_memory);
+            device.unmap_memory(staging_buffer_memory);
+        };
+
+        let (vertex_buffer, vertex_buffer_memory) = vk_initializers::create_buffer(
+            &instance,
+            physical_device,
+            &device,
+            buffer_size,
+            vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        );
+
+        vk_initializers::copy_buffer(
+            &device,
+            command_pool,
+            graphics_queue,
+            staging_buffer,
+            vertex_buffer,
+            buffer_size,
+        );
+        unsafe {
+            device.destroy_buffer(staging_buffer, None);
+            device.free_memory(staging_buffer_memory, None);
         };
 
         return VkEngine {
