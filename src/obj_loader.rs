@@ -7,14 +7,14 @@ pub fn read_obj_file(file_path: &str) -> (Vec<Vec3>, Vec<(u32, u32, u32)>) {
     let (mut vertices, mut faces) = (Vec::<Vec3>::new(), Vec::<(u32, u32, u32)>::new());
 
     'outer: for (i, line) in file_content
-        .split("\r\n")
+        .split(&['\r', '\n'][..])
         .collect::<Vec<&str>>()
         .iter()
         .enumerate()
     {
         let mut result = Vec::<f32>::new();
-        // I shouldn't need to do this, but alas, UTF-8 makes things more complicated.
-        // Technically .obj files are ASCII only and I shouldn't need to worry about unicode, but Rust only
+        // I shouldn't need to do this, but alas, UTF-8 makes things more complicated, and although
+        // technically .obj files are ASCII only and I shouldn't need to worry about unicode, Rust only
         // offers unicode strings and I'm in no mood to keep casting back and forth.
         for value in line.split(&[' ', 't'][..]).collect::<Vec<&str>>() {
             match value {
@@ -24,6 +24,11 @@ pub fn read_obj_file(file_path: &str) -> (Vec<Vec3>, Vec<(u32, u32, u32)>) {
                 }
                 // Face or vertex specifier
                 "v" | "f" => {}
+                // Other specifiers
+                // ToDo: Probably wanna implement these later.
+                "g" | "usemtl" | "mtllib" | "vt" | "vn" => {
+                    panic!("No support for {} yet!", value);
+                }
                 // Actual numbers
                 _ => {
                     result.push(
