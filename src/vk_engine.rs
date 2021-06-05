@@ -2,6 +2,7 @@ extern crate ash;
 extern crate sdl2;
 
 use crate::math::Vec3;
+use crate::obj_loader::read_obj_file;
 use crate::vk_initializers;
 
 use ash::extensions::{
@@ -19,45 +20,6 @@ struct Vertex {
     pos: Vec3,
     col: Vec3,
 }
-
-const VERTECIES: [Vertex; 3] = [
-    Vertex {
-        pos: Vec3 {
-            x: 0.0f32,
-            y: -0.5f32,
-            z: 0.0f32,
-        },
-        col: Vec3 {
-            x: 1.0f32,
-            y: 0.0f32,
-            z: 0.0f32,
-        },
-    },
-    Vertex {
-        pos: Vec3 {
-            x: 0.5f32,
-            y: 0.5f32,
-            z: 0.0f32,
-        },
-        col: Vec3 {
-            x: 0.0f32,
-            y: 1.0f32,
-            z: 0.0f32,
-        },
-    },
-    Vertex {
-        pos: Vec3 {
-            x: -0.5f32,
-            y: 0.5f32,
-            z: 0.0f32,
-        },
-        col: Vec3 {
-            x: 0.0f32,
-            y: 0.0f32,
-            z: 1.0f32,
-        },
-    },
-];
 
 impl Vertex {
     pub fn get_binding_description() -> vk::VertexInputBindingDescription {
@@ -84,6 +46,17 @@ impl Vertex {
                 .build(),
         ];
     }
+
+    pub fn construct_vertices_from_positions(positions: Vec<Vec3>) -> Vec<Vertex> {
+        let mut result = Vec::<Vertex>::with_capacity(positions.len());
+        for position in positions {
+            result.push(Vertex {
+                pos: position,
+                col: Vec3::new(1.0),
+            });
+        }
+        return result;
+    }
 }
 
 struct VkPipelineBuilder {
@@ -102,10 +75,7 @@ impl VkPipelineBuilder {
     pub fn default() -> VkPipelineBuilder {
         return VkPipelineBuilder {
             shader_stages: Vec::<vk::PipelineShaderStageCreateInfo>::default(),
-            vertex_input_info: vk::PipelineVertexInputStateCreateInfo::builder()
-                .vertex_binding_descriptions(&[Vertex::get_binding_description()])
-                .vertex_attribute_descriptions(&Vertex::get_attribute_description())
-                .build(),
+            vertex_input_info: vk::PipelineVertexInputStateCreateInfo::default(),
             input_assembly: vk::PipelineInputAssemblyStateCreateInfo::default(),
             viewport: vk::Viewport::default(),
             scissor: vk::Rect2D::default(),
@@ -186,8 +156,12 @@ pub struct VkEngine {
     triangle_fragment_shader_module: vk::ShaderModule,
     triangle_pipeline_layout: vk::PipelineLayout,
     triangle_pipeline: vk::Pipeline,
+    vertices: Vec<Vertex>,
     vertex_buffer: vk::Buffer,
     vertex_buffer_memory: vk::DeviceMemory,
+    indices: Vec<u32>,
+    index_buffer: vk::Buffer,
+    index_buffer_memory: vk::DeviceMemory,
 }
 
 impl VkEngine {
@@ -326,50 +300,50 @@ impl VkEngine {
 
         let triangle_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
 
-        let buffer_size = (size_of::<Vertex>() * VERTECIES.len()) as u64;
+        let (positions, indices) = read_obj_file("./assets/models/cube.obj");
+        let vertices = Vertex::construct_vertices_from_positions(positions);
 
-        let (staging_buffer, staging_buffer_memory) = vk_initializers::create_buffer(
-            &instance,
-            physical_device,
-            &device,
-            buffer_size,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        );
-
-        unsafe {
-            let vertex_data_ptr = device
-                .map_memory(
-                    staging_buffer_memory,
-                    0,
-                    buffer_size,
-                    vk::MemoryMapFlags::empty(),
-                )
-                .unwrap() as *mut Vertex;
-            vertex_data_ptr.copy_from_nonoverlapping(VERTECIES.as_ptr(), VERTECIES.len());
-            device.unmap_memory(staging_buffer_memory);
-        };
+        let vertex_buffer_size = (size_of::<Vertex>() * vertices.len()) as u64;
+        let index_buffer_size = (size_of::<u32>() * indices.len()) as u64;
 
         let (vertex_buffer, vertex_buffer_memory) = vk_initializers::create_buffer(
             &instance,
             physical_device,
             &device,
-            buffer_size,
-            vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            vertex_buffer_size,
+            vk::BufferUsageFlags::VERTEX_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        );
+        let (index_buffer, index_buffer_memory) = vk_initializers::create_buffer(
+            &instance,
+            physical_device,
+            &device,
+            index_buffer_size,
+            vk::BufferUsageFlags::INDEX_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         );
 
-        vk_initializers::copy_buffer(
-            &device,
-            command_pool,
-            graphics_queue,
-            staging_buffer,
-            vertex_buffer,
-            buffer_size,
-        );
         unsafe {
-            device.destroy_buffer(staging_buffer, None);
-            device.free_memory(staging_buffer_memory, None);
+            // Persistant mapping.
+            let vertex_data_ptr = device
+                .map_memory(
+                    vertex_buffer_memory,
+                    0,
+                    vertex_buffer_size,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .unwrap() as *mut Vertex;
+            let index_data_ptr = device
+                .map_memory(
+                    index_buffer_memory,
+                    0,
+                    index_buffer_size,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .unwrap() as *mut u32;
+
+            vertex_data_ptr.copy_from_nonoverlapping(vertices.as_ptr(), vertices.len());
+            index_data_ptr.copy_from_nonoverlapping(indices.as_ptr(), indices.len());
         };
 
         return VkEngine {
@@ -402,8 +376,12 @@ impl VkEngine {
             triangle_fragment_shader_module,
             triangle_pipeline_layout,
             triangle_pipeline,
+            vertices,
             vertex_buffer,
             vertex_buffer_memory,
+            indices,
+            index_buffer,
+            index_buffer_memory,
         };
     }
 
@@ -438,6 +416,8 @@ impl VkEngine {
             .destroy_swapchain(self.swapchain, None);
         self.device.destroy_buffer(self.vertex_buffer, None);
         self.device.free_memory(self.vertex_buffer_memory, None);
+        self.device.destroy_buffer(self.index_buffer, None);
+        self.device.free_memory(self.index_buffer_memory, None);
         self.device.destroy_device(None);
         self.surface_loader.destroy_surface(self.surface, None);
 
@@ -483,10 +463,14 @@ impl VkEngine {
                 .unwrap();
         };
 
-        let flash = ((self.frame_count as f32) / 120.0f32).sin().abs();
         let mut clear_value = vk::ClearValue::default();
         clear_value.color = vk::ClearColorValue {
-            float32: [0.0f32, 0.0f32, flash, 1.0f32],
+            float32: [
+                15.0f32 / 256.0f32,
+                15.0f32 / 256.0f32,
+                15.0f32 / 256.0f32,
+                1.0f32,
+            ],
         };
 
         let renderpass_begin_info = vk::RenderPassBeginInfo::builder()
@@ -515,8 +499,20 @@ impl VkEngine {
                 &[self.vertex_buffer],
                 &[0],
             );
-            self.device
-                .cmd_draw(self.command_buffer, VERTECIES.len() as u32, 1, 0, 0);
+            self.device.cmd_bind_index_buffer(
+                self.command_buffer,
+                self.index_buffer,
+                0,
+                vk::IndexType::UINT32,
+            );
+            self.device.cmd_draw_indexed(
+                self.command_buffer,
+                self.indices.len() as u32,
+                1,
+                0,
+                0,
+                0,
+            );
             self.device.cmd_end_render_pass(self.command_buffer);
             self.device.end_command_buffer(self.command_buffer).unwrap();
         };

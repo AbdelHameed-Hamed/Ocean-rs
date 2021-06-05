@@ -155,9 +155,9 @@ pub fn get_physical_device_and_graphics_queue_family_index(
                                     )
                                     .unwrap();
                         if supports_graphic_and_surface {
-                            Some((*physical_device, index))
+                            return Some((*physical_device, index));
                         } else {
-                            None
+                            return None;
                         }
                     });
             })

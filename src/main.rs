@@ -1,4 +1,5 @@
 mod math;
+mod obj_loader;
 mod vk_engine;
 mod vk_initializers;
 

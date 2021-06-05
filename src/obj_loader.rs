@@ -1,10 +1,10 @@
 use crate::math::Vec3;
 
-// Returns pair of vectors for vertices and faces
-pub fn read_obj_file(file_path: &str) -> (Vec<Vec3>, Vec<(u32, u32, u32)>) {
+// Returns pair of vectors for vertices and indices
+pub fn read_obj_file(file_path: &str) -> (Vec<Vec3>, Vec<u32>) {
     let file_content = std::fs::read_to_string(file_path).unwrap();
 
-    let (mut vertices, mut faces) = (Vec::<Vec3>::new(), Vec::<(u32, u32, u32)>::new());
+    let (mut vertices, mut indices) = (Vec::<Vec3>::new(), Vec::<u32>::new());
 
     'outer: for (i, line) in file_content
         .split(&['\r', '\n'][..])
@@ -19,7 +19,7 @@ pub fn read_obj_file(file_path: &str) -> (Vec<Vec3>, Vec<(u32, u32, u32)>) {
         for value in line.split(&[' ', 't'][..]).collect::<Vec<&str>>() {
             match value {
                 // Comment or blank line
-                "#" | "" => {
+                "#" | "" | "s" => {
                     continue 'outer;
                 }
                 // Face or vertex specifier
@@ -53,11 +53,19 @@ pub fn read_obj_file(file_path: &str) -> (Vec<Vec3>, Vec<(u32, u32, u32)>) {
                 z: result[2],
             });
         } else if line.find('f') != None {
-            faces.push((result[0] as u32, result[1] as u32, result[2] as u32));
+            indices = [
+                indices,
+                vec![
+                    result[0] as u32 - 1,
+                    result[1] as u32 - 1,
+                    result[2] as u32 - 1,
+                ],
+            ]
+            .concat();
         } else {
             panic!("Line #{} is neither face nor vertex: {}", i, line);
         }
     }
 
-    return (vertices, faces);
+    return (vertices, indices);
 }
