@@ -1,6 +1,7 @@
 use std::process::Command;
 
 fn main() {
+    // dxc -T vs_6_0 -E vs_main -Zi -spirv ./assets/shaders/triangle.hlsl -Fo ./shaders/triangle.vert.spv
     Command::new("dxc")
         .args(&[
             "-T",

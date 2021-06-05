@@ -8,9 +8,19 @@ struct VSOut {
     float4 color: COLOR;
 };
 
+[[vk::push_constant]]
+struct {
+    column_major float4x4 model;
+    column_major float4x4 view;
+    column_major float4x4 projection;
+} transforms;
+
 VSOut vs_main(VSIn input) {
     VSOut output = {
-        float4(input.position, 1.0f),
+        mul(
+            mul(transforms.projection, mul(transforms.view, transforms.model)),
+            float4(input.position, 1.0f)
+        ),
         float4(input.color, 1.0f)
     };
     return output;

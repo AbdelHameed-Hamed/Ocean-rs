@@ -47,7 +47,7 @@ pub fn create_instance(window: &Window) -> (Entry, Instance) {
         .application_version(0)
         .engine_name(&application_name)
         .engine_version(0)
-        .api_version(vk::make_version(1, 1, 0));
+        .api_version(vk::make_version(1, 2, 0));
 
     let create_info = vk::InstanceCreateInfo::builder()
         .application_info(&app_info)

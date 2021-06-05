@@ -1,7 +1,7 @@
 extern crate ash;
 extern crate sdl2;
 
-use crate::math::Vec3;
+use crate::math::{Mat4, Vec3};
 use crate::obj_loader::read_obj_file;
 use crate::vk_initializers;
 
@@ -56,6 +56,36 @@ impl Vertex {
             });
         }
         return result;
+    }
+}
+
+struct Camera {
+    pos: Vec3,
+    front: Vec3,
+    up: Vec3,
+    yaw: f32,
+    pitch: f32,
+    fov: f32,
+}
+
+impl Default for Camera {
+    fn default() -> Self {
+        return Camera {
+            pos: Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 3.0,
+            },
+            front: Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: -1.0,
+            },
+            up: Vec3::up(),
+            yaw: -90.0,
+            pitch: 0.0,
+            fov: 45.0,
+        };
     }
 }
 
@@ -162,6 +192,7 @@ pub struct VkEngine {
     indices: Vec<u32>,
     index_buffer: vk::Buffer,
     index_buffer_memory: vk::DeviceMemory,
+    camera: Camera,
 }
 
 impl VkEngine {
@@ -243,7 +274,15 @@ impl VkEngine {
 
         let triangle_pipeline_layout = unsafe {
             device
-                .create_pipeline_layout(&vk_initializers::pipeline_layout_create_info(), None)
+                .create_pipeline_layout(
+                    &vk::PipelineLayoutCreateInfo::builder()
+                        .push_constant_ranges(&[vk::PushConstantRange::builder()
+                            .size(size_of::<Mat4>() as u32 * 3)
+                            .stage_flags(vk::ShaderStageFlags::VERTEX)
+                            .build()])
+                        .build(),
+                    None,
+                )
                 .unwrap()
         };
 
@@ -300,7 +339,7 @@ impl VkEngine {
 
         let triangle_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
 
-        let (positions, indices) = read_obj_file("./assets/models/cube.obj");
+        let (positions, indices) = read_obj_file("./assets/models/bunny.obj");
         let vertices = Vertex::construct_vertices_from_positions(positions);
 
         let vertex_buffer_size = (size_of::<Vertex>() * vertices.len()) as u64;
@@ -346,6 +385,8 @@ impl VkEngine {
             index_data_ptr.copy_from_nonoverlapping(indices.as_ptr(), indices.len());
         };
 
+        let camera = Camera::default();
+
         return VkEngine {
             sdl_context,
             window,
@@ -382,6 +423,7 @@ impl VkEngine {
             indices,
             index_buffer,
             index_buffer_memory,
+            camera,
         };
     }
 
@@ -505,6 +547,33 @@ impl VkEngine {
                 0,
                 vk::IndexType::UINT32,
             );
+
+            #[rustfmt::skip]
+            let model = Mat4::rotate(Vec3{ x: 0.0, y: 0.0, z: 0.0 }, 180.0) *
+             Mat4::scale(Vec3{ x: 7.0, y: 7.0, z: 7.0 });
+
+            #[rustfmt::skip]
+            let view = Mat4::look_at_rh(
+                self.camera.pos,
+                self.camera.pos + self.camera.front,
+                self.camera.up,
+            );
+
+            let projection = Mat4::prespective(
+                self.camera.fov,
+                self.size.width as f32 / self.size.height as f32,
+                0.1,
+                100.0,
+            );
+
+            self.device.cmd_push_constants(
+                self.command_buffer,
+                self.triangle_pipeline_layout,
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                &[model, view, projection].align_to::<u8>().1, // Forgive me, father, for I have sinned.
+            );
+
             self.device.cmd_draw_indexed(
                 self.command_buffer,
                 self.indices.len() as u32,

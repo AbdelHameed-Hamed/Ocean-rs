@@ -11,7 +11,7 @@ impl Vec3 {
     }
 
     pub fn up() -> Vec3 {
-        return Vec3 { x: 0.0, y: 0.0, z: 0.0 };
+        return Vec3 { x: 0.0, y: 1.0, z: 0.0 };
     }
 
     pub fn dot(lhs: Vec3, rhs: Vec3) -> f32 {
