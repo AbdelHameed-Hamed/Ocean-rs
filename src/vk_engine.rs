@@ -193,11 +193,13 @@ pub struct VkEngine {
     index_buffer: vk::Buffer,
     index_buffer_memory: vk::DeviceMemory,
     camera: Camera,
+    last_timestamp: std::time::Instant,
 }
 
 impl VkEngine {
     pub fn new(width: u32, height: u32) -> VkEngine {
-        let (sdl_context, window) = vk_initializers::create_sdl_window(width, height);
+        let (sdl_context, mut window) = vk_initializers::create_sdl_window(width, height);
+        sdl_context.mouse().set_relative_mouse_mode(true);
 
         let (entry, instance) = vk_initializers::create_instance(&window);
 
@@ -424,6 +426,7 @@ impl VkEngine {
             index_buffer,
             index_buffer_memory,
             camera,
+            last_timestamp: std::time::Instant::now(),
         };
     }
 
@@ -616,6 +619,13 @@ impl VkEngine {
         let mut event_pump = self.sdl_context.event_pump().unwrap();
 
         'running: loop {
+            let current_timestamp = std::time::Instant::now();
+            let delta_time = current_timestamp
+                .duration_since(self.last_timestamp)
+                .as_millis() as f32
+                / 1000.0;
+            self.last_timestamp = current_timestamp;
+            println!("{}\n", delta_time);
             for event in event_pump.poll_iter() {
                 match event {
                     Event::Quit { .. }
@@ -624,6 +634,46 @@ impl VkEngine {
                         ..
                     } => {
                         break 'running;
+                    }
+                    Event::MouseMotion {
+                        xrel: x, yrel: y, ..
+                    } => {
+                        // Note: I'm not sure if xrel and yrel account for deltas between frames.
+                        let sensitivity = 0.1;
+                        self.camera.yaw += sensitivity * x as f32;
+                        self.camera.pitch =
+                            (self.camera.pitch + sensitivity * y as f32).clamp(-89.0, 89.0);
+                        self.camera.front = Vec3 {
+                            x: self.camera.yaw.to_radians().cos(),
+                            y: self.camera.pitch.to_radians().sin(),
+                            z: self.camera.yaw.to_radians().sin()
+                                * self.camera.pitch.to_radians().cos(),
+                        }
+                    }
+                    Event::MouseWheel { y: scroll_y, .. } => {
+                        self.camera.fov = (self.camera.fov - scroll_y as f32).clamp(1.0, 60.0);
+                    }
+                    Event::KeyDown {
+                        keycode: Some(pressed_key),
+                        ..
+                    } => {
+                        let camera_speed = 2.5 * delta_time;
+                        if pressed_key == Keycode::W {
+                            self.camera.pos += self.camera.front * camera_speed;
+                        }
+                        if pressed_key == Keycode::S {
+                            self.camera.pos -= self.camera.front * camera_speed;
+                        }
+                        if pressed_key == Keycode::A {
+                            self.camera.pos -= Vec3::cross(self.camera.front, self.camera.up)
+                                .normal()
+                                * camera_speed;
+                        }
+                        if pressed_key == Keycode::D {
+                            self.camera.pos += Vec3::cross(self.camera.front, self.camera.up)
+                                .normal()
+                                * camera_speed;
+                        }
                     }
                     _ => {}
                 }
