@@ -18,7 +18,7 @@ use std::mem::size_of;
 
 struct Vertex {
     pos: Vec3,
-    col: Vec3,
+    norm: Vec3,
 }
 
 impl Vertex {
@@ -47,12 +47,17 @@ impl Vertex {
         ];
     }
 
-    pub fn construct_vertices_from_positions(positions: Vec<Vec3>) -> Vec<Vertex> {
+    pub fn construct_vertices_from_positions(
+        positions: Vec<Vec3>,
+        normals: Vec<Vec3>,
+    ) -> Vec<Vertex> {
+        assert!(positions.len() == normals.len());
+
         let mut result = Vec::<Vertex>::with_capacity(positions.len());
-        for position in positions {
+        for (i, _) in positions.iter().enumerate() {
             result.push(Vertex {
-                pos: position,
-                col: Vec3::new(1.0),
+                pos: positions[i],
+                norm: normals[i],
             });
         }
         return result;
@@ -341,8 +346,8 @@ impl VkEngine {
 
         let triangle_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
 
-        let (positions, indices) = read_obj_file("./assets/models/bunny.obj");
-        let vertices = Vertex::construct_vertices_from_positions(positions);
+        let (positions, normals, indices) = read_obj_file("./assets/models/monkey.obj");
+        let vertices = Vertex::construct_vertices_from_positions(positions, normals);
 
         let vertex_buffer_size = (size_of::<Vertex>() * vertices.len()) as u64;
         let index_buffer_size = (size_of::<u32>() * indices.len()) as u64;
@@ -552,8 +557,7 @@ impl VkEngine {
             );
 
             #[rustfmt::skip]
-            let model = Mat4::rotate(Vec3{ x: 0.0, y: 0.0, z: 0.0 }, 180.0) *
-             Mat4::scale(Vec3{ x: 7.0, y: 7.0, z: 7.0 });
+            let model = Mat4::rotate(Vec3{ x: 0.0, y: 0.0, z: 1.0 }, 180.0f32.to_radians());
 
             #[rustfmt::skip]
             let view = Mat4::look_at_rh(
@@ -625,7 +629,7 @@ impl VkEngine {
                 .as_millis() as f32
                 / 1000.0;
             self.last_timestamp = current_timestamp;
-            println!("{}\n", delta_time);
+
             for event in event_pump.poll_iter() {
                 match event {
                     Event::Quit { .. }
