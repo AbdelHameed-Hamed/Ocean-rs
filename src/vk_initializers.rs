@@ -300,7 +300,7 @@ pub fn create_swapchain_image_views(
 }
 
 pub fn create_renderpass(surface_format: &vk::SurfaceFormatKHR, device: &Device) -> vk::RenderPass {
-    let color_attachemt = vk::AttachmentDescription::builder()
+    let color_attachment = vk::AttachmentDescription::builder()
         .format(surface_format.format)
         .samples(vk::SampleCountFlags::TYPE_1)
         .load_op(vk::AttachmentLoadOp::CLEAR)
@@ -310,22 +310,35 @@ pub fn create_renderpass(surface_format: &vk::SurfaceFormatKHR, device: &Device)
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
         .build();
-    let color_attachments = [color_attachemt];
     let color_attachment_reference = vk::AttachmentReference::builder()
         .attachment(0)
         .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
         .build();
-    let color_attachment_references = [color_attachment_reference];
+
+    let depth_attachment = vk::AttachmentDescription::builder()
+        .format(vk::Format::D32_SFLOAT)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::STORE)
+        .stencil_load_op(vk::AttachmentLoadOp::CLEAR)
+        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+        .build();
+    let depth_attachment_reference = vk::AttachmentReference::builder()
+        .attachment(1)
+        .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+        .build();
 
     let subpass = vk::SubpassDescription::builder()
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(&color_attachment_references)
+        .color_attachments(&[color_attachment_reference])
+        .depth_stencil_attachment(&depth_attachment_reference)
         .build();
-    let subpasses = [subpass];
 
     let renderpass_create_info = vk::RenderPassCreateInfo::builder()
-        .attachments(&color_attachments)
-        .subpasses(&subpasses)
+        .attachments(&[color_attachment, depth_attachment])
+        .subpasses(&[subpass])
         .build();
     return unsafe {
         device
@@ -336,6 +349,7 @@ pub fn create_renderpass(surface_format: &vk::SurfaceFormatKHR, device: &Device)
 
 pub fn create_framebuffers(
     swapchain_image_views: &Vec<vk::ImageView>,
+    depth_image_view: vk::ImageView,
     render_pass: &vk::RenderPass,
     width: u32,
     height: u32,
@@ -346,7 +360,7 @@ pub fn create_framebuffers(
         .map(|&image| {
             let framebuffer_create_info = vk::FramebufferCreateInfo::builder()
                 .render_pass(*render_pass)
-                .attachments(&[image])
+                .attachments(&[image, depth_image_view])
                 .width(width)
                 .height(height)
                 .layers(1)
@@ -584,4 +598,91 @@ pub fn copy_buffer(
         device.queue_wait_idle(graphics_queue).unwrap();
         device.free_command_buffers(command_pool, &[command_buffer]);
     };
+}
+
+pub fn create_image_create_info(
+    format: vk::Format,
+    usage: vk::ImageUsageFlags,
+    extent: vk::Extent3D,
+) -> vk::ImageCreateInfo {
+    return vk::ImageCreateInfo::builder()
+        .image_type(vk::ImageType::TYPE_2D)
+        .format(format)
+        .extent(extent)
+        .mip_levels(1)
+        .array_layers(1)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .usage(usage)
+        .build();
+}
+
+pub fn create_image(
+    instance: &Instance,
+    physical_device: vk::PhysicalDevice,
+    device: &Device,
+    create_info: vk::ImageCreateInfo,
+    properties: vk::MemoryPropertyFlags,
+) -> (vk::Image, vk::DeviceMemory) {
+    let image = unsafe { device.create_image(&create_info, None).unwrap() };
+
+    let memory_properties =
+        unsafe { instance.get_physical_device_memory_properties(physical_device) };
+    let memory_requirements = unsafe { device.get_image_memory_requirements(image) };
+    let memory_type = memory_properties
+        .memory_types
+        .iter()
+        .enumerate()
+        .find_map(|(i, memory_type)| {
+            if (memory_requirements.memory_type_bits & (1 << i)) > 0
+                && memory_type.property_flags.contains(properties)
+            {
+                return Some(i as u32);
+            } else {
+                return None;
+            }
+        })
+        .unwrap();
+
+    let memory_allocate_info = vk::MemoryAllocateInfo::builder()
+        .allocation_size(memory_requirements.size)
+        .memory_type_index(memory_type)
+        .build();
+    let image_memory = unsafe { device.allocate_memory(&memory_allocate_info, None).unwrap() };
+
+    unsafe { device.bind_image_memory(image, image_memory, 0).unwrap() };
+
+    return (image, image_memory);
+}
+
+pub fn create_imageview_create_info(
+    format: vk::Format,
+    image: vk::Image,
+    aspect_flags: vk::ImageAspectFlags,
+) -> vk::ImageViewCreateInfo {
+    return vk::ImageViewCreateInfo::builder()
+        .view_type(vk::ImageViewType::TYPE_2D)
+        .format(format)
+        .image(image)
+        .subresource_range(
+            vk::ImageSubresourceRange::builder()
+                .base_mip_level(0)
+                .level_count(1)
+                .base_array_layer(0)
+                .layer_count(1)
+                .aspect_mask(aspect_flags)
+                .build(),
+        )
+        .build();
+}
+
+pub fn create_depth_stencil_create_info() -> vk::PipelineDepthStencilStateCreateInfo {
+    return vk::PipelineDepthStencilStateCreateInfo::builder()
+        .depth_test_enable(true)
+        .depth_write_enable(true)
+        .depth_compare_op(vk::CompareOp::LESS)
+        .depth_test_enable(false)
+        .min_depth_bounds(0.0f32)
+        .max_depth_bounds(1.0f32)
+        .build();
 }

@@ -16,6 +16,16 @@ use sdl2::keyboard::Keycode;
 use sdl2::video::Window;
 use std::mem::size_of;
 
+struct VkBuffer {
+    buffer: vk::Buffer,
+    buffer_memory: vk::DeviceMemory,
+}
+
+struct VkImage {
+    image: vk::Image,
+    image_memory: vk::DeviceMemory,
+}
+
 struct Vertex {
     pos: Vec3,
     norm: Vec3,
@@ -75,17 +85,10 @@ struct Camera {
 
 impl Default for Camera {
     fn default() -> Self {
+        #[rustfmt::skip]
         return Camera {
-            pos: Vec3 {
-                x: 0.0,
-                y: 0.0,
-                z: 3.0,
-            },
-            front: Vec3 {
-                x: 0.0,
-                y: 0.0,
-                z: -1.0,
-            },
+            pos: Vec3 { x: 0.0, y: 0.0, z: 3.0 },
+            front: Vec3 { x: 0.0, y: 0.0, z: -1.0 },
             up: Vec3::up(),
             yaw: -90.0,
             pitch: 0.0,
@@ -103,6 +106,7 @@ struct VkPipelineBuilder {
     rasterizer: vk::PipelineRasterizationStateCreateInfo,
     color_blend_attachment: vk::PipelineColorBlendAttachmentState,
     multisampling: vk::PipelineMultisampleStateCreateInfo,
+    depth_stencil_state: vk::PipelineDepthStencilStateCreateInfo,
     pipeline_layout: vk::PipelineLayout,
 }
 
@@ -117,6 +121,7 @@ impl VkPipelineBuilder {
             rasterizer: vk::PipelineRasterizationStateCreateInfo::default(),
             color_blend_attachment: vk::PipelineColorBlendAttachmentState::default(),
             multisampling: vk::PipelineMultisampleStateCreateInfo::default(),
+            depth_stencil_state: vk::PipelineDepthStencilStateCreateInfo::default(),
             pipeline_layout: vk::PipelineLayout::default(),
         };
     }
@@ -146,6 +151,7 @@ impl VkPipelineBuilder {
             .rasterization_state(&self.rasterizer)
             .multisample_state(&self.multisampling)
             .color_blend_state(&color_blend_state_create_info)
+            .depth_stencil_state(&self.depth_stencil_state)
             .layout(self.pipeline_layout)
             .render_pass(*render_pass)
             .subpass(0)
@@ -178,6 +184,9 @@ pub struct VkEngine {
     swapchain_image_format: vk::Format,
     swapchain_images: Vec<vk::Image>,
     swapchain_image_views: Vec<vk::ImageView>,
+    depth_image_format: vk::Format,
+    depth_image: VkImage,
+    depth_image_view: vk::ImageView,
     render_pass: vk::RenderPass,
     framebuffers: Vec<vk::Framebuffer>,
     graphics_queue: vk::Queue,
@@ -192,11 +201,9 @@ pub struct VkEngine {
     triangle_pipeline_layout: vk::PipelineLayout,
     triangle_pipeline: vk::Pipeline,
     vertices: Vec<Vertex>,
-    vertex_buffer: vk::Buffer,
-    vertex_buffer_memory: vk::DeviceMemory,
+    vertex_buffer: VkBuffer,
     indices: Vec<u32>,
-    index_buffer: vk::Buffer,
-    index_buffer_memory: vk::DeviceMemory,
+    index_buffer: VkBuffer,
     camera: Camera,
     last_timestamp: std::time::Instant,
 }
@@ -247,10 +254,46 @@ impl VkEngine {
             &device,
         );
 
+        let depth_image_extent = vk::Extent3D::builder()
+            .width(width)
+            .height(height)
+            .depth(1)
+            .build();
+        let depth_image_format = vk::Format::D32_SFLOAT;
+
+        let depth_image_create_info = vk_initializers::create_image_create_info(
+            depth_image_format,
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            depth_image_extent,
+        );
+        let (depth_image, depth_image_memory) = vk_initializers::create_image(
+            &instance,
+            physical_device,
+            &device,
+            depth_image_create_info,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        );
+        let depth_image = VkImage {
+            image: depth_image,
+            image_memory: depth_image_memory,
+        };
+
+        let depth_image_view_create_info = vk_initializers::create_imageview_create_info(
+            depth_image_format,
+            depth_image.image,
+            vk::ImageAspectFlags::DEPTH,
+        );
+        let depth_image_view = unsafe {
+            device
+                .create_image_view(&depth_image_view_create_info, None)
+                .unwrap()
+        };
+
         let render_pass = vk_initializers::create_renderpass(&surface_format, &device);
 
         let framebuffers = vk_initializers::create_framebuffers(
             &swapchain_image_views,
+            depth_image_view,
             &render_pass,
             width,
             height,
@@ -342,6 +385,8 @@ impl VkEngine {
 
         pipeline_builder.color_blend_attachment = vk_initializers::color_blend_attachment_state();
 
+        pipeline_builder.depth_stencil_state = vk_initializers::create_depth_stencil_create_info();
+
         pipeline_builder.pipeline_layout = triangle_pipeline_layout;
 
         let triangle_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
@@ -411,6 +456,9 @@ impl VkEngine {
             swapchain_image_format: surface_format.format,
             swapchain_images,
             swapchain_image_views,
+            depth_image_format,
+            depth_image,
+            depth_image_view,
             render_pass,
             framebuffers,
             graphics_queue,
@@ -425,11 +473,15 @@ impl VkEngine {
             triangle_pipeline_layout,
             triangle_pipeline,
             vertices,
-            vertex_buffer,
-            vertex_buffer_memory,
+            vertex_buffer: VkBuffer {
+                buffer: vertex_buffer,
+                buffer_memory: vertex_buffer_memory,
+            },
             indices,
-            index_buffer,
-            index_buffer_memory,
+            index_buffer: VkBuffer {
+                buffer: index_buffer,
+                buffer_memory: index_buffer_memory,
+            },
             camera,
             last_timestamp: std::time::Instant::now(),
         };
@@ -458,16 +510,22 @@ impl VkEngine {
             .destroy_pipeline_layout(self.triangle_pipeline_layout, None);
         self.device.destroy_render_pass(self.render_pass, None);
 
+        self.device.destroy_image_view(self.depth_image_view, None);
+        self.device.destroy_image(self.depth_image.image, None);
+        self.device.free_memory(self.depth_image.image_memory, None);
+
         for &image_view in self.swapchain_image_views.iter() {
             self.device.destroy_image_view(image_view, None);
         }
 
         self.swapchain_loader
             .destroy_swapchain(self.swapchain, None);
-        self.device.destroy_buffer(self.vertex_buffer, None);
-        self.device.free_memory(self.vertex_buffer_memory, None);
-        self.device.destroy_buffer(self.index_buffer, None);
-        self.device.free_memory(self.index_buffer_memory, None);
+        self.device.destroy_buffer(self.vertex_buffer.buffer, None);
+        self.device
+            .free_memory(self.vertex_buffer.buffer_memory, None);
+        self.device.destroy_buffer(self.index_buffer.buffer, None);
+        self.device
+            .free_memory(self.index_buffer.buffer_memory, None);
         self.device.destroy_device(None);
         self.surface_loader.destroy_surface(self.surface, None);
 
@@ -523,6 +581,9 @@ impl VkEngine {
             ],
         };
 
+        let mut depth_clear_value = vk::ClearValue::default();
+        depth_clear_value.depth_stencil.depth = 1.0f32;
+
         let renderpass_begin_info = vk::RenderPassBeginInfo::builder()
             .render_pass(self.render_pass)
             .render_area(vk::Rect2D {
@@ -530,7 +591,7 @@ impl VkEngine {
                 extent: self.size,
             })
             .framebuffer(self.framebuffers[swapchain_image_index as usize])
-            .clear_values(&[clear_value])
+            .clear_values(&[clear_value, depth_clear_value])
             .build();
         unsafe {
             self.device.cmd_begin_render_pass(
@@ -546,12 +607,12 @@ impl VkEngine {
             self.device.cmd_bind_vertex_buffers(
                 self.command_buffer,
                 0,
-                &[self.vertex_buffer],
+                &[self.vertex_buffer.buffer],
                 &[0],
             );
             self.device.cmd_bind_index_buffer(
                 self.command_buffer,
-                self.index_buffer,
+                self.index_buffer.buffer,
                 0,
                 vk::IndexType::UINT32,
             );
