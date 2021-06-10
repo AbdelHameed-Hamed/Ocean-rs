@@ -502,10 +502,6 @@ pub fn color_blend_attachment_state() -> vk::PipelineColorBlendAttachmentState {
         .build();
 }
 
-pub fn pipeline_layout_create_info() -> vk::PipelineLayoutCreateInfo {
-    return vk::PipelineLayoutCreateInfo::default();
-}
-
 pub fn create_buffer(
     instance: &Instance,
     physical_device: vk::PhysicalDevice,
@@ -680,9 +676,9 @@ pub fn create_depth_stencil_create_info() -> vk::PipelineDepthStencilStateCreate
     return vk::PipelineDepthStencilStateCreateInfo::builder()
         .depth_test_enable(true)
         .depth_write_enable(true)
-        .depth_compare_op(vk::CompareOp::LESS)
-        .depth_test_enable(false)
+        .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL)
         .min_depth_bounds(0.0f32)
         .max_depth_bounds(1.0f32)
+        .stencil_test_enable(false)
         .build();
 }
