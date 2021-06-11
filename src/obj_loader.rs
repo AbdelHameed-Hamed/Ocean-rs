@@ -1,5 +1,3 @@
-use std::iter::Map;
-
 use crate::math::Vec3;
 
 // Note: God this is an ugly function. Wanna nuke it at some point and do it properly.

@@ -177,20 +177,15 @@ pub struct VkEngine {
     debug_callback: vk::DebugUtilsMessengerEXT,
     surface: vk::SurfaceKHR,
     surface_loader: Surface,
-    physical_device: vk::PhysicalDevice,
     device: Device,
     swapchain_loader: Swapchain,
     swapchain: vk::SwapchainKHR,
-    swapchain_image_format: vk::Format,
-    swapchain_images: Vec<vk::Image>,
     swapchain_image_views: Vec<vk::ImageView>,
-    depth_image_format: vk::Format,
     depth_image: VkImage,
     depth_image_view: vk::ImageView,
     render_pass: vk::RenderPass,
     framebuffers: Vec<vk::Framebuffer>,
     graphics_queue: vk::Queue,
-    graphics_queue_family_index: u32,
     command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
     render_fence: vk::Fence,
@@ -200,7 +195,6 @@ pub struct VkEngine {
     triangle_fragment_shader_module: vk::ShaderModule,
     triangle_pipeline_layout: vk::PipelineLayout,
     triangle_pipeline: vk::Pipeline,
-    vertices: Vec<Vertex>,
     vertex_buffer: VkBuffer,
     indices: Vec<u32>,
     index_buffer: VkBuffer,
@@ -210,7 +204,7 @@ pub struct VkEngine {
 
 impl VkEngine {
     pub fn new(width: u32, height: u32) -> VkEngine {
-        let (sdl_context, mut window) = vk_initializers::create_sdl_window(width, height);
+        let (sdl_context, window) = vk_initializers::create_sdl_window(width, height);
         sdl_context.mouse().set_relative_mouse_mode(true);
 
         let (entry, instance) = vk_initializers::create_instance(&window);
@@ -449,20 +443,15 @@ impl VkEngine {
             debug_callback,
             surface,
             surface_loader,
-            physical_device,
             device,
             swapchain_loader,
             swapchain,
-            swapchain_image_format: surface_format.format,
-            swapchain_images,
             swapchain_image_views,
-            depth_image_format,
             depth_image,
             depth_image_view,
             render_pass,
             framebuffers,
             graphics_queue,
-            graphics_queue_family_index: queue_family_index,
             command_pool,
             command_buffer: command_buffers[0], // Should probably do something about this.
             render_fence,
@@ -472,7 +461,6 @@ impl VkEngine {
             triangle_fragment_shader_module,
             triangle_pipeline_layout,
             triangle_pipeline,
-            vertices,
             vertex_buffer: VkBuffer {
                 buffer: vertex_buffer,
                 buffer_memory: vertex_buffer_memory,
