@@ -44,9 +44,9 @@ struct Material {
     pipeline_layout: vk::PipelineLayout,
 }
 
-struct RenderObject<'a> {
-    mesh: &'a Mesh,
-    material: &'a Material,
+struct RenderObject {
+    mesh_key: String,
+    material_key: String,
     transformation_matrix: Mat4,
 }
 
@@ -210,9 +210,9 @@ pub struct VkEngine {
     render_semaphore: vk::Semaphore,
     triangle_vertex_shader_module: vk::ShaderModule,
     triangle_fragment_shader_module: vk::ShaderModule,
-    triangle_pipeline_layout: vk::PipelineLayout,
-    triangle_pipeline: vk::Pipeline,
     meshes: HashMap<String, Mesh>,
+    materials: HashMap<String, Material>,
+    renderables: Vec<RenderObject>,
     camera: Camera,
     last_timestamp: std::time::Instant,
 }
@@ -413,7 +413,6 @@ impl VkEngine {
 
         let camera = Camera::default();
 
-        // ToDo, this should own the mesh
         let mut mesh_map = HashMap::<String, Mesh>::new();
         mesh_map.insert("monkey".to_string(), monkey_mesh);
         mesh_map.insert("triangle".to_string(), triangle_mesh);
@@ -426,6 +425,41 @@ impl VkEngine {
                 pipeline_layout: triangle_pipeline_layout,
             },
         );
+
+        let mut scene = Vec::<RenderObject>::with_capacity(401);
+        scene.push(RenderObject {
+            mesh_key: "monkey".to_string(),
+            material_key: "default".to_string(),
+            transformation_matrix: Mat4::rotate(
+                Vec3 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
+                180.0f32.to_radians(),
+            ),
+        });
+
+        for x in -20..=20 {
+            for y in -20..=20 {
+                let translation = Mat4::translate(Vec3 {
+                    x: x as f32,
+                    y: 0.0,
+                    z: y as f32,
+                });
+                let scale = Mat4::scale(Vec3 {
+                    x: 0.2,
+                    y: 0.2,
+                    z: 0.2,
+                });
+
+                scene.push(RenderObject {
+                    mesh_key: "triangle".to_string(),
+                    material_key: "default".to_string(),
+                    transformation_matrix: translation * scale,
+                });
+            }
+        }
 
         return VkEngine {
             sdl_context,
@@ -453,9 +487,9 @@ impl VkEngine {
             present_semaphore,
             triangle_vertex_shader_module,
             triangle_fragment_shader_module,
-            triangle_pipeline_layout,
-            triangle_pipeline,
             meshes: mesh_map,
+            materials: material_map,
+            renderables: scene,
             camera,
             last_timestamp: std::time::Instant::now(),
         };
@@ -545,9 +579,11 @@ impl VkEngine {
             self.device.destroy_framebuffer(framebuffer, None);
         }
 
-        self.device.destroy_pipeline(self.triangle_pipeline, None);
-        self.device
-            .destroy_pipeline_layout(self.triangle_pipeline_layout, None);
+        for (_, material) in self.materials.iter() {
+            self.device.destroy_pipeline(material.pipeline, None);
+            self.device
+                .destroy_pipeline_layout(material.pipeline_layout, None);
+        }
         self.device.destroy_render_pass(self.render_pass, None);
 
         self.device.destroy_image_view(self.depth_image_view, None);
@@ -644,57 +680,9 @@ impl VkEngine {
                 &renderpass_begin_info,
                 vk::SubpassContents::INLINE,
             );
-            self.device.cmd_bind_pipeline(
-                self.command_buffer,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.triangle_pipeline,
-            );
-            self.device.cmd_bind_vertex_buffers(
-                self.command_buffer,
-                0,
-                &[self.meshes["monkey"].vertex_buffer.buffer],
-                &[0],
-            );
-            self.device.cmd_bind_index_buffer(
-                self.command_buffer,
-                self.meshes["monkey"].index_buffer.buffer,
-                0,
-                vk::IndexType::UINT32,
-            );
 
-            #[rustfmt::skip]
-            let model = Mat4::rotate(Vec3{ x: 0.0, y: 0.0, z: 1.0 }, 180.0f32.to_radians());
+            self.draw_objects();
 
-            #[rustfmt::skip]
-            let view = Mat4::look_at_rh(
-                self.camera.pos,
-                self.camera.pos + self.camera.front,
-                self.camera.up,
-            );
-
-            let projection = Mat4::prespective(
-                self.camera.fov,
-                self.size.width as f32 / self.size.height as f32,
-                0.1,
-                100.0,
-            );
-
-            self.device.cmd_push_constants(
-                self.command_buffer,
-                self.triangle_pipeline_layout,
-                vk::ShaderStageFlags::VERTEX,
-                0,
-                &[model, view, projection].align_to::<u8>().1, // Forgive me, father, for I have sinned.
-            );
-
-            self.device.cmd_draw_indexed(
-                self.command_buffer,
-                self.meshes["monkey"].indices.len() as u32,
-                1,
-                0,
-                0,
-                0,
-            );
             self.device.cmd_end_render_pass(self.command_buffer);
             self.device.end_command_buffer(self.command_buffer).unwrap();
         };
@@ -723,6 +711,73 @@ impl VkEngine {
         };
 
         self.frame_count += 1;
+    }
+
+    unsafe fn draw_objects(&self) {
+        let view = Mat4::look_at_rh(
+            self.camera.pos,
+            self.camera.pos + self.camera.front,
+            self.camera.up,
+        );
+
+        let projection = Mat4::prespective(
+            self.camera.fov,
+            self.size.width as f32 / self.size.height as f32,
+            0.1,
+            100.0,
+        );
+
+        let (mut last_mesh_key, mut last_material_key) = ("".to_string(), "".to_string());
+        for RenderObject {
+            mesh_key,
+            material_key,
+            transformation_matrix,
+        } in self.renderables.iter()
+        {
+            if *material_key != last_material_key {
+                self.device.cmd_bind_pipeline(
+                    self.command_buffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.materials[material_key].pipeline,
+                );
+                last_material_key = material_key.clone();
+            }
+
+            if *mesh_key != last_mesh_key {
+                self.device.cmd_bind_vertex_buffers(
+                    self.command_buffer,
+                    0,
+                    &[self.meshes[mesh_key].vertex_buffer.buffer],
+                    &[0],
+                );
+                self.device.cmd_bind_index_buffer(
+                    self.command_buffer,
+                    self.meshes[mesh_key].index_buffer.buffer,
+                    0,
+                    vk::IndexType::UINT32,
+                );
+                last_mesh_key = mesh_key.clone();
+            }
+
+            self.device.cmd_push_constants(
+                self.command_buffer,
+                self.materials[material_key].pipeline_layout,
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                &[*transformation_matrix, view, projection]
+                    .align_to::<u8>()
+                    .1, // Forgive me, father, for I have sinned.
+            );
+
+            self.device.cmd_draw_indexed(
+                self.command_buffer,
+                self.meshes[mesh_key].indices.len() as u32,
+                1,
+                0,
+                0,
+                0,
+            );
+        }
     }
 
     pub fn run(&mut self) {
