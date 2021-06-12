@@ -10,10 +10,11 @@ use ash::extensions::{
     khr::{Surface, Swapchain},
 };
 use ash::version::{DeviceV1_0, InstanceV1_0};
-use ash::{vk, Device, Instance};
+use ash::{vk, vk::PhysicalDevice, Device, Instance};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::video::Window;
+use std::collections::HashMap;
 use std::mem::size_of;
 
 struct VkBuffer {
@@ -29,6 +30,24 @@ struct VkImage {
 struct Vertex {
     pos: Vec3,
     norm: Vec3,
+}
+
+struct Mesh {
+    vertices: Vec<Vertex>,
+    vertex_buffer: VkBuffer,
+    indices: Vec<u32>,
+    index_buffer: VkBuffer,
+}
+
+struct Material {
+    pipeline: vk::Pipeline,
+    pipeline_layout: vk::PipelineLayout,
+}
+
+struct RenderObject<'a> {
+    mesh: &'a Mesh,
+    material: &'a Material,
+    transformation_matrix: Mat4,
 }
 
 impl Vertex {
@@ -154,8 +173,6 @@ impl VkPipelineBuilder {
             .depth_stencil_state(&self.depth_stencil_state)
             .layout(self.pipeline_layout)
             .render_pass(*render_pass)
-            .subpass(0)
-            .base_pipeline_handle(vk::Pipeline::null())
             .build();
         let pipeline = unsafe {
             device
@@ -195,9 +212,7 @@ pub struct VkEngine {
     triangle_fragment_shader_module: vk::ShaderModule,
     triangle_pipeline_layout: vk::PipelineLayout,
     triangle_pipeline: vk::Pipeline,
-    vertex_buffer: VkBuffer,
-    indices: Vec<u32>,
-    index_buffer: VkBuffer,
+    meshes: HashMap<String, Mesh>,
     camera: Camera,
     last_timestamp: std::time::Instant,
 }
@@ -366,10 +381,7 @@ impl VkEngine {
 
         pipeline_builder.scissor = vk::Rect2D::builder()
             .offset(vk::Offset2D { x: 0, y: 0 })
-            .extent(vk::Extent2D {
-                width: width,
-                height: height,
-            })
+            .extent(vk::Extent2D { width, height })
             .build();
 
         pipeline_builder.rasterizer =
@@ -385,7 +397,77 @@ impl VkEngine {
 
         let triangle_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
 
-        let (positions, normals, indices) = read_obj_file("./assets/models/monkey.obj");
+        let monkey_mesh = VkEngine::load_and_upload_mesh(
+            &instance,
+            physical_device,
+            &device,
+            "./assets/models/monkey.obj",
+        );
+
+        let triangle_mesh = VkEngine::load_and_upload_mesh(
+            &instance,
+            physical_device,
+            &device,
+            "./assets/models/triangle.obj",
+        );
+
+        let camera = Camera::default();
+
+        // ToDo, this should own the mesh
+        let mut mesh_map = HashMap::<String, Mesh>::new();
+        mesh_map.insert("monkey".to_string(), monkey_mesh);
+        mesh_map.insert("triangle".to_string(), triangle_mesh);
+
+        let mut material_map = HashMap::<String, Material>::new();
+        material_map.insert(
+            "default".to_string(),
+            Material {
+                pipeline: triangle_pipeline,
+                pipeline_layout: triangle_pipeline_layout,
+            },
+        );
+
+        return VkEngine {
+            sdl_context,
+            window,
+            size: vk::Extent2D { width, height },
+            frame_count: 0,
+            instance,
+            debug_utils_loader,
+            debug_callback,
+            surface,
+            surface_loader,
+            device,
+            swapchain_loader,
+            swapchain,
+            swapchain_image_views,
+            depth_image,
+            depth_image_view,
+            render_pass,
+            framebuffers,
+            graphics_queue,
+            command_pool,
+            command_buffer: command_buffers[0], // Should probably do something about this.
+            render_fence,
+            render_semaphore,
+            present_semaphore,
+            triangle_vertex_shader_module,
+            triangle_fragment_shader_module,
+            triangle_pipeline_layout,
+            triangle_pipeline,
+            meshes: mesh_map,
+            camera,
+            last_timestamp: std::time::Instant::now(),
+        };
+    }
+
+    fn load_and_upload_mesh(
+        instance: &Instance,
+        physical_device: PhysicalDevice,
+        device: &Device,
+        path: &str,
+    ) -> Mesh {
+        let (positions, normals, indices) = read_obj_file(path);
         let vertices = Vertex::construct_vertices_from_positions(positions, normals);
 
         let vertex_buffer_size = (size_of::<Vertex>() * vertices.len()) as u64;
@@ -431,47 +513,17 @@ impl VkEngine {
             index_data_ptr.copy_from_nonoverlapping(indices.as_ptr(), indices.len());
         };
 
-        let camera = Camera::default();
-
-        return VkEngine {
-            sdl_context,
-            window,
-            size: vk::Extent2D { width, height },
-            frame_count: 0,
-            instance,
-            debug_utils_loader,
-            debug_callback,
-            surface,
-            surface_loader,
-            device,
-            swapchain_loader,
-            swapchain,
-            swapchain_image_views,
-            depth_image,
-            depth_image_view,
-            render_pass,
-            framebuffers,
-            graphics_queue,
-            command_pool,
-            command_buffer: command_buffers[0], // Should probably do something about this.
-            render_fence,
-            render_semaphore,
-            present_semaphore,
-            triangle_vertex_shader_module,
-            triangle_fragment_shader_module,
-            triangle_pipeline_layout,
-            triangle_pipeline,
+        return Mesh {
+            vertices,
+            indices,
             vertex_buffer: VkBuffer {
                 buffer: vertex_buffer,
                 buffer_memory: vertex_buffer_memory,
             },
-            indices,
             index_buffer: VkBuffer {
                 buffer: index_buffer,
                 buffer_memory: index_buffer_memory,
             },
-            camera,
-            last_timestamp: std::time::Instant::now(),
         };
     }
 
@@ -508,12 +560,17 @@ impl VkEngine {
 
         self.swapchain_loader
             .destroy_swapchain(self.swapchain, None);
-        self.device.destroy_buffer(self.vertex_buffer.buffer, None);
-        self.device
-            .free_memory(self.vertex_buffer.buffer_memory, None);
-        self.device.destroy_buffer(self.index_buffer.buffer, None);
-        self.device
-            .free_memory(self.index_buffer.buffer_memory, None);
+
+        for (_, mesh) in self.meshes.iter() {
+            self.device.destroy_buffer(mesh.vertex_buffer.buffer, None);
+            self.device.destroy_buffer(mesh.index_buffer.buffer, None);
+
+            self.device
+                .free_memory(mesh.vertex_buffer.buffer_memory, None);
+            self.device
+                .free_memory(mesh.index_buffer.buffer_memory, None);
+        }
+
         self.device.destroy_device(None);
         self.surface_loader.destroy_surface(self.surface, None);
 
@@ -595,12 +652,12 @@ impl VkEngine {
             self.device.cmd_bind_vertex_buffers(
                 self.command_buffer,
                 0,
-                &[self.vertex_buffer.buffer],
+                &[self.meshes["monkey"].vertex_buffer.buffer],
                 &[0],
             );
             self.device.cmd_bind_index_buffer(
                 self.command_buffer,
-                self.index_buffer.buffer,
+                self.meshes["monkey"].index_buffer.buffer,
                 0,
                 vk::IndexType::UINT32,
             );
@@ -632,7 +689,7 @@ impl VkEngine {
 
             self.device.cmd_draw_indexed(
                 self.command_buffer,
-                self.indices.len() as u32,
+                self.meshes["monkey"].indices.len() as u32,
                 1,
                 0,
                 0,

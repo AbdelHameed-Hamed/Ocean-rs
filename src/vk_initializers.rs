@@ -221,10 +221,7 @@ pub fn create_swapchain_loader_and_swapchain(
         desired_image_count = surface_capabilities.max_image_count;
     }
     let surface_resolution = match surface_capabilities.current_extent.width {
-        std::u32::MAX => vk::Extent2D {
-            width: width,
-            height: height,
-        },
+        std::u32::MAX => vk::Extent2D { width, height },
         _ => surface_capabilities.current_extent,
     };
     let pre_transform = if surface_capabilities
