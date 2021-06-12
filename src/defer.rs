@@ -1,23 +1,23 @@
 pub struct PrivateDefer<T>
 where
-    T: Fn() -> (),
+    T: FnMut() -> (),
 {
     pub func: T,
 }
 
 impl<T> Drop for PrivateDefer<T>
 where
-    T: Fn() -> (),
+    T: FnMut() -> (),
 {
     fn drop(&mut self) {
         (self.func)();
     }
 }
 
-#[macro_export(local_inner_macros)]
+#[macro_export]
 macro_rules! defer {
     ($func:expr) => {
         #[rustfmt::skip]
-        let _defer = PrivateDefer { func: || { $func; } };
+        let _defer = $crate::defer::PrivateDefer { func: || { $func; } };
     };
 }
