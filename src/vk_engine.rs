@@ -58,6 +58,8 @@ struct FrameData {
     render_fence: vk::Fence,
     command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
+    camera_buffer: VkBuffer,
+    global_descriptor: vk::DescriptorSet,
 }
 
 impl Vertex {
@@ -213,6 +215,8 @@ pub struct VkEngine {
     render_pass: vk::RenderPass,
     framebuffers: Vec<vk::Framebuffer>,
     graphics_queue: vk::Queue,
+    global_set_layout: vk::DescriptorSetLayout,
+    descriptor_pool: vk::DescriptorPool,
     frame_data: [FrameData; FRAME_OVERLAP],
     triangle_vertex_shader_module: vk::ShaderModule,
     triangle_fragment_shader_module: vk::ShaderModule,
@@ -317,6 +321,34 @@ impl VkEngine {
 
         let graphics_queue = unsafe { device.get_device_queue(queue_family_index, 0) };
 
+        let camera_buffer_binding = vk::DescriptorSetLayoutBinding::builder()
+            .binding(0)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .build();
+        let global_set_info = vk::DescriptorSetLayoutCreateInfo::builder()
+            .bindings(&[camera_buffer_binding])
+            .build();
+        let global_set_layout = unsafe {
+            device
+                .create_descriptor_set_layout(&global_set_info, None)
+                .unwrap()
+        };
+
+        let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
+            .max_sets(10)
+            .pool_sizes(&[vk::DescriptorPoolSize::builder()
+                .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(10)
+                .build()])
+            .build();
+        let descriptor_pool = unsafe {
+            device
+                .create_descriptor_pool(&descriptor_pool_info, None)
+                .unwrap()
+        };
+
         let mut frame_data: [FrameData; FRAME_OVERLAP] = unsafe { std::mem::zeroed() };
         for i in 0..FRAME_OVERLAP {
             let semaphore_create_info = vk::SemaphoreCreateInfo::default();
@@ -339,12 +371,52 @@ impl VkEngine {
             let (command_pool, command_buffers) =
                 vk_initializers::create_command_pool_and_buffer(queue_family_index, &device);
 
+            let uniform_size = size_of::<[Mat4; 3]>() as u64;
+
+            let (camera_buffer, camera_buffer_memory) = vk_initializers::create_buffer(
+                &instance,
+                physical_device,
+                &device,
+                uniform_size,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            );
+
+            let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
+                .descriptor_pool(descriptor_pool)
+                .set_layouts(&[global_set_layout])
+                .build();
+            let descriptor_set = unsafe {
+                device
+                    .allocate_descriptor_sets(&descriptor_set_allocate_info)
+                    .unwrap()[0]
+            };
+
+            let buffer_info = vk::DescriptorBufferInfo::builder()
+                .buffer(camera_buffer)
+                .offset(0)
+                .range(uniform_size)
+                .build();
+
+            let set_write = vk::WriteDescriptorSet::builder()
+                .dst_binding(0)
+                .dst_set(descriptor_set)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(&[buffer_info])
+                .build();
+            unsafe { device.update_descriptor_sets(&[set_write], &[]) };
+
             frame_data[i] = FrameData {
                 present_semaphore,
                 render_semaphore,
                 render_fence,
                 command_pool,
                 command_buffer: command_buffers[0],
+                camera_buffer: VkBuffer {
+                    buffer: camera_buffer,
+                    buffer_memory: camera_buffer_memory,
+                },
+                global_descriptor: descriptor_set,
             };
         }
 
@@ -356,6 +428,7 @@ impl VkEngine {
                             .size(size_of::<Mat4>() as u32 * 3)
                             .stage_flags(vk::ShaderStageFlags::VERTEX)
                             .build()])
+                        .set_layouts(&[global_set_layout])
                         .build(),
                     None,
                 )
@@ -497,6 +570,8 @@ impl VkEngine {
             render_pass,
             framebuffers,
             graphics_queue,
+            global_set_layout,
+            descriptor_pool,
             frame_data,
             triangle_vertex_shader_module,
             triangle_fragment_shader_module,
@@ -582,6 +657,11 @@ impl VkEngine {
         self.device
             .destroy_shader_module(self.triangle_fragment_shader_module, None);
 
+        self.device
+            .destroy_descriptor_set_layout(self.global_set_layout, None);
+        self.device
+            .destroy_descriptor_pool(self.descriptor_pool, None);
+
         for frame_data in self.frame_data.iter() {
             self.device
                 .destroy_semaphore(frame_data.present_semaphore, None);
@@ -591,6 +671,11 @@ impl VkEngine {
 
             self.device
                 .destroy_command_pool(frame_data.command_pool, None);
+
+            self.device
+                .destroy_buffer(frame_data.camera_buffer.buffer, None);
+            self.device
+                .free_memory(frame_data.camera_buffer.buffer_memory, None);
         }
         for &framebuffer in self.framebuffers.iter() {
             self.device.destroy_framebuffer(framebuffer, None);
@@ -755,6 +840,14 @@ impl VkEngine {
                     self.materials[material_key].pipeline,
                 );
                 last_material_key = material_key.clone();
+                self.device.cmd_bind_descriptor_sets(
+                    frame_data.command_buffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.materials[material_key].pipeline_layout,
+                    0,
+                    &[frame_data.global_descriptor],
+                    &[],
+                )
             }
 
             if *mesh_key != last_mesh_key {
@@ -773,14 +866,27 @@ impl VkEngine {
                 last_mesh_key = mesh_key.clone();
             }
 
+            let transforms = [*transformation_matrix, view, projection];
+
+            let camera_data_ptr = self
+                .device
+                .map_memory(
+                    frame_data.camera_buffer.buffer_memory,
+                    0,
+                    (size_of::<Mat4>() * transforms.len()) as u64,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .unwrap() as *mut Mat4;
+            camera_data_ptr.copy_from_nonoverlapping(transforms.as_ptr(), transforms.len());
+            self.device
+                .unmap_memory(frame_data.camera_buffer.buffer_memory);
+
             self.device.cmd_push_constants(
                 frame_data.command_buffer,
                 self.materials[material_key].pipeline_layout,
                 vk::ShaderStageFlags::VERTEX,
                 0,
-                &[*transformation_matrix, view, projection]
-                    .align_to::<u8>()
-                    .1, // Forgive me, father, for I have sinned.
+                &transforms.align_to::<u8>().1, // Forgive me, father, for I have sinned.
             );
 
             self.device.cmd_draw_indexed(

@@ -15,10 +15,16 @@ struct {
     column_major float4x4 projection;
 } transforms;
 
+cbuffer transforms2: register(b0) {
+    column_major float4x4 model;
+    column_major float4x4 view;
+    column_major float4x4 projection;
+};
+
 VSOut vs_main(VSIn input) {
     VSOut output = {
         mul(
-            mul(transforms.projection, mul(transforms.view, transforms.model)),
+            mul(projection, mul(view, model)),
             float4(input.position, 1.0f)
         ),
         float4(input.color, 1.0f)
