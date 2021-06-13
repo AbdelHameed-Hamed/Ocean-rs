@@ -50,6 +50,16 @@ struct RenderObject {
     transformation_matrix: Mat4,
 }
 
+const FRAME_OVERLAP: usize = 2;
+
+struct FrameData {
+    present_semaphore: vk::Semaphore,
+    render_semaphore: vk::Semaphore,
+    render_fence: vk::Fence,
+    command_pool: vk::CommandPool,
+    command_buffer: vk::CommandBuffer,
+}
+
 impl Vertex {
     pub fn get_binding_description() -> vk::VertexInputBindingDescription {
         return vk::VertexInputBindingDescription::builder()
@@ -203,11 +213,7 @@ pub struct VkEngine {
     render_pass: vk::RenderPass,
     framebuffers: Vec<vk::Framebuffer>,
     graphics_queue: vk::Queue,
-    command_pool: vk::CommandPool,
-    command_buffer: vk::CommandBuffer,
-    render_fence: vk::Fence,
-    present_semaphore: vk::Semaphore,
-    render_semaphore: vk::Semaphore,
+    frame_data: [FrameData; FRAME_OVERLAP],
     triangle_vertex_shader_module: vk::ShaderModule,
     triangle_fragment_shader_module: vk::ShaderModule,
     meshes: HashMap<String, Mesh>,
@@ -311,25 +317,36 @@ impl VkEngine {
 
         let graphics_queue = unsafe { device.get_device_queue(queue_family_index, 0) };
 
-        let (command_pool, command_buffers) =
-            vk_initializers::create_command_pool_and_buffer(queue_family_index, &device);
+        let mut frame_data: [FrameData; FRAME_OVERLAP] = unsafe { std::mem::zeroed() };
+        for i in 0..FRAME_OVERLAP {
+            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
+            let render_semaphore = unsafe {
+                device
+                    .create_semaphore(&semaphore_create_info, None)
+                    .unwrap()
+            };
+            let present_semaphore = unsafe {
+                device
+                    .create_semaphore(&semaphore_create_info, None)
+                    .unwrap()
+            };
 
-        let fence_create_info = vk::FenceCreateInfo::builder()
-            .flags(vk::FenceCreateFlags::SIGNALED)
-            .build();
-        let render_fence = unsafe { device.create_fence(&fence_create_info, None).unwrap() };
+            let fence_create_info = vk::FenceCreateInfo::builder()
+                .flags(vk::FenceCreateFlags::SIGNALED)
+                .build();
+            let render_fence = unsafe { device.create_fence(&fence_create_info, None).unwrap() };
 
-        let semaphore_create_info = vk::SemaphoreCreateInfo::default();
-        let render_semaphore = unsafe {
-            device
-                .create_semaphore(&semaphore_create_info, None)
-                .unwrap()
-        };
-        let present_semaphore = unsafe {
-            device
-                .create_semaphore(&semaphore_create_info, None)
-                .unwrap()
-        };
+            let (command_pool, command_buffers) =
+                vk_initializers::create_command_pool_and_buffer(queue_family_index, &device);
+
+            frame_data[i] = FrameData {
+                present_semaphore,
+                render_semaphore,
+                render_fence,
+                command_pool,
+                command_buffer: command_buffers[0],
+            };
+        }
 
         let triangle_pipeline_layout = unsafe {
             device
@@ -480,11 +497,7 @@ impl VkEngine {
             render_pass,
             framebuffers,
             graphics_queue,
-            command_pool,
-            command_buffer: command_buffers[0], // Should probably do something about this.
-            render_fence,
-            render_semaphore,
-            present_semaphore,
+            frame_data,
             triangle_vertex_shader_module,
             triangle_fragment_shader_module,
             meshes: mesh_map,
@@ -569,12 +582,16 @@ impl VkEngine {
         self.device
             .destroy_shader_module(self.triangle_fragment_shader_module, None);
 
-        self.device.destroy_semaphore(self.present_semaphore, None);
-        self.device.destroy_semaphore(self.render_semaphore, None);
-        self.device.destroy_fence(self.render_fence, None);
+        for frame_data in self.frame_data.iter() {
+            self.device
+                .destroy_semaphore(frame_data.present_semaphore, None);
+            self.device
+                .destroy_semaphore(frame_data.render_semaphore, None);
+            self.device.destroy_fence(frame_data.render_fence, None);
 
-        self.device.destroy_command_pool(self.command_pool, None);
-
+            self.device
+                .destroy_command_pool(frame_data.command_pool, None);
+        }
         for &framebuffer in self.framebuffers.iter() {
             self.device.destroy_framebuffer(framebuffer, None);
         }
@@ -616,41 +633,40 @@ impl VkEngine {
         self.instance.destroy_instance(None);
     }
 
-    pub fn draw(&mut self) {
-        unsafe {
-            self.device
-                .wait_for_fences(&[self.render_fence], true, std::u64::MAX)
-                .unwrap();
-            self.device.reset_fences(&[self.render_fence]).unwrap();
-        };
+    pub unsafe fn draw(&mut self) {
+        let frame_data = &self.frame_data[self.frame_count as usize % FRAME_OVERLAP];
 
-        let swapchain_image_index = unsafe {
-            self.swapchain_loader
-                .acquire_next_image(
-                    self.swapchain,
-                    std::u64::MAX,
-                    self.present_semaphore,
-                    vk::Fence::null(),
-                )
-                .unwrap()
-                .0
-        };
+        self.device
+            .wait_for_fences(&[frame_data.render_fence], true, std::u64::MAX)
+            .unwrap();
+        self.device
+            .reset_fences(&[frame_data.render_fence])
+            .unwrap();
 
-        unsafe {
-            self.device
-                .reset_command_buffer(
-                    self.command_buffer,
-                    vk::CommandBufferResetFlags::from_raw(0),
-                )
-                .unwrap();
+        let swapchain_image_index = self
+            .swapchain_loader
+            .acquire_next_image(
+                self.swapchain,
+                std::u64::MAX,
+                frame_data.present_semaphore,
+                vk::Fence::null(),
+            )
+            .unwrap()
+            .0;
 
-            let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-                .build();
-            self.device
-                .begin_command_buffer(self.command_buffer, &command_buffer_begin_info)
-                .unwrap();
-        };
+        self.device
+            .reset_command_buffer(
+                frame_data.command_buffer,
+                vk::CommandBufferResetFlags::from_raw(0),
+            )
+            .unwrap();
+
+        let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+            .build();
+        self.device
+            .begin_command_buffer(frame_data.command_buffer, &command_buffer_begin_info)
+            .unwrap();
 
         let mut clear_value = vk::ClearValue::default();
         clear_value.color = vk::ClearColorValue {
@@ -674,46 +690,44 @@ impl VkEngine {
             .framebuffer(self.framebuffers[swapchain_image_index as usize])
             .clear_values(&[clear_value, depth_clear_value])
             .build();
-        unsafe {
-            self.device.cmd_begin_render_pass(
-                self.command_buffer,
-                &renderpass_begin_info,
-                vk::SubpassContents::INLINE,
-            );
+        self.device.cmd_begin_render_pass(
+            frame_data.command_buffer,
+            &renderpass_begin_info,
+            vk::SubpassContents::INLINE,
+        );
 
-            self.draw_objects();
+        self.draw_objects();
 
-            self.device.cmd_end_render_pass(self.command_buffer);
-            self.device.end_command_buffer(self.command_buffer).unwrap();
-        };
+        self.device.cmd_end_render_pass(frame_data.command_buffer);
+        self.device
+            .end_command_buffer(frame_data.command_buffer)
+            .unwrap();
 
         let submit_info = vk::SubmitInfo::builder()
             .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
-            .wait_semaphores(&[self.present_semaphore])
-            .signal_semaphores(&[self.render_semaphore])
-            .command_buffers(&[self.command_buffer])
+            .wait_semaphores(&[frame_data.present_semaphore])
+            .signal_semaphores(&[frame_data.render_semaphore])
+            .command_buffers(&[frame_data.command_buffer])
             .build();
-        unsafe {
-            self.device
-                .queue_submit(self.graphics_queue, &[submit_info], self.render_fence)
-                .unwrap();
-        };
+        self.device
+            .queue_submit(self.graphics_queue, &[submit_info], frame_data.render_fence)
+            .unwrap();
 
         let present_info = vk::PresentInfoKHR::builder()
             .swapchains(&[self.swapchain])
-            .wait_semaphores(&[self.render_semaphore])
+            .wait_semaphores(&[frame_data.render_semaphore])
             .image_indices(&[swapchain_image_index])
             .build();
-        unsafe {
-            self.swapchain_loader
-                .queue_present(self.graphics_queue, &present_info)
-                .unwrap();
-        };
+        self.swapchain_loader
+            .queue_present(self.graphics_queue, &present_info)
+            .unwrap();
 
         self.frame_count += 1;
     }
 
     unsafe fn draw_objects(&self) {
+        let frame_data = &self.frame_data[self.frame_count as usize % FRAME_OVERLAP];
+
         let view = Mat4::look_at_rh(
             self.camera.pos,
             self.camera.pos + self.camera.front,
@@ -736,7 +750,7 @@ impl VkEngine {
         {
             if *material_key != last_material_key {
                 self.device.cmd_bind_pipeline(
-                    self.command_buffer,
+                    frame_data.command_buffer,
                     vk::PipelineBindPoint::GRAPHICS,
                     self.materials[material_key].pipeline,
                 );
@@ -745,13 +759,13 @@ impl VkEngine {
 
             if *mesh_key != last_mesh_key {
                 self.device.cmd_bind_vertex_buffers(
-                    self.command_buffer,
+                    frame_data.command_buffer,
                     0,
                     &[self.meshes[mesh_key].vertex_buffer.buffer],
                     &[0],
                 );
                 self.device.cmd_bind_index_buffer(
-                    self.command_buffer,
+                    frame_data.command_buffer,
                     self.meshes[mesh_key].index_buffer.buffer,
                     0,
                     vk::IndexType::UINT32,
@@ -760,7 +774,7 @@ impl VkEngine {
             }
 
             self.device.cmd_push_constants(
-                self.command_buffer,
+                frame_data.command_buffer,
                 self.materials[material_key].pipeline_layout,
                 vk::ShaderStageFlags::VERTEX,
                 0,
@@ -770,7 +784,7 @@ impl VkEngine {
             );
 
             self.device.cmd_draw_indexed(
-                self.command_buffer,
+                frame_data.command_buffer,
                 self.meshes[mesh_key].indices.len() as u32,
                 1,
                 0,
@@ -844,7 +858,9 @@ impl VkEngine {
                 }
             }
 
-            self.draw();
+            unsafe {
+                self.draw();
+            };
         }
     }
 }
