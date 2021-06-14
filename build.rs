@@ -21,6 +21,7 @@ fn main() {
                     "-E",
                     "INVALID",
                     "-Zi",
+                    "-Od",
                     "-spirv",
                     path.to_str().unwrap(),
                     "-Fo",
@@ -52,7 +53,7 @@ fn main() {
                         panic!("Unsupported shader type: {}", shader_type);
                     }
                 }
-                command_args[8] = output_file_name.as_str();
+                command_args[9] = output_file_name.as_str();
                 eprintln!(
                     "{}",
                     Command::new("dxc").args(&command_args).status().unwrap()

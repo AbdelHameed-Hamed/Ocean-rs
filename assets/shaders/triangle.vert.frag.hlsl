@@ -10,13 +10,10 @@ struct VSOut {
 
 [[vk::push_constant]]
 struct {
-    column_major float4x4 model;
-    column_major float4x4 view;
-    column_major float4x4 projection;
-} transforms;
+    column_major float4x4 model_matrix;
+} model_data;
 
 cbuffer transforms2: register(b0) {
-    column_major float4x4 model;
     column_major float4x4 view;
     column_major float4x4 projection;
 };
@@ -24,7 +21,7 @@ cbuffer transforms2: register(b0) {
 VSOut vs_main(VSIn input) {
     VSOut output = {
         mul(
-            mul(projection, mul(view, model)),
+            mul(projection, mul(view, model_data.model_matrix)),
             float4(input.position, 1.0f)
         ),
         float4(input.color, 1.0f)

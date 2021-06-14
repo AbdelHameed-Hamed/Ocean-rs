@@ -371,7 +371,7 @@ impl VkEngine {
             let (command_pool, command_buffers) =
                 vk_initializers::create_command_pool_and_buffer(queue_family_index, &device);
 
-            let uniform_size = size_of::<[Mat4; 3]>() as u64;
+            let uniform_size = size_of::<[Mat4; 2]>() as u64;
 
             let (camera_buffer, camera_buffer_memory) = vk_initializers::create_buffer(
                 &instance,
@@ -425,7 +425,7 @@ impl VkEngine {
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::builder()
                         .push_constant_ranges(&[vk::PushConstantRange::builder()
-                            .size(size_of::<Mat4>() as u32 * 3)
+                            .size(size_of::<Mat4>() as u32)
                             .stage_flags(vk::ShaderStageFlags::VERTEX)
                             .build()])
                         .set_layouts(&[global_set_layout])
@@ -520,14 +520,11 @@ impl VkEngine {
         scene.push(RenderObject {
             mesh_key: "monkey".to_string(),
             material_key: "default".to_string(),
-            transformation_matrix: Mat4::rotate(
-                Vec3 {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 1.0,
-                },
-                180.0f32.to_radians(),
-            ),
+            transformation_matrix: Mat4::scale(Vec3 {
+                x: 1.0,
+                y: -1.0,
+                z: 1.0,
+            }),
         });
 
         for x in -20..=20 {
@@ -866,7 +863,7 @@ impl VkEngine {
                 last_mesh_key = mesh_key.clone();
             }
 
-            let transforms = [*transformation_matrix, view, projection];
+            let transforms = [view, projection];
 
             let camera_data_ptr = self
                 .device
@@ -886,7 +883,7 @@ impl VkEngine {
                 self.materials[material_key].pipeline_layout,
                 vk::ShaderStageFlags::VERTEX,
                 0,
-                &transforms.align_to::<u8>().1, // Forgive me, father, for I have sinned.
+                &[*transformation_matrix].align_to::<u8>().1, // Forgive me, father, for I have sinned.
             );
 
             self.device.cmd_draw_indexed(
