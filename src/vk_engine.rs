@@ -342,7 +342,7 @@ impl VkEngine {
             vk::ShaderStageFlags::VERTEX,
         );
         let scene_buffer_binding = vk_initializers::descriptor_set_layout_binding(
-            vk::DescriptorType::UNIFORM_BUFFER,
+            vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
             1,
             1,
             vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
@@ -359,10 +359,16 @@ impl VkEngine {
 
         let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
             .max_sets(10)
-            .pool_sizes(&[vk::DescriptorPoolSize::builder()
-                .ty(vk::DescriptorType::UNIFORM_BUFFER)
-                .descriptor_count(10)
-                .build()])
+            .pool_sizes(&[
+                vk::DescriptorPoolSize::builder()
+                    .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                    .descriptor_count(10)
+                    .build(),
+                vk::DescriptorPoolSize::builder()
+                    .ty(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
+                    .descriptor_count(10)
+                    .build(),
+            ])
             .build();
         let descriptor_pool = unsafe {
             device
@@ -432,10 +438,7 @@ impl VkEngine {
 
             let scene_buffer_info = vk::DescriptorBufferInfo::builder()
                 .buffer(scene_param_buffer)
-                .offset(Self::return_aligned_size(
-                    physical_device_properties,
-                    uniform_size as usize * i,
-                ) as u64)
+                .offset(0)
                 .range(size_of::<SceneData>() as u64)
                 .build();
 
@@ -449,7 +452,7 @@ impl VkEngine {
             let scene_set_write = vk::WriteDescriptorSet::builder()
                 .dst_binding(1)
                 .dst_set(descriptor_set)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
                 .buffer_info(&[scene_buffer_info])
                 .build();
 
@@ -792,7 +795,8 @@ impl VkEngine {
     }
 
     pub unsafe fn draw(&mut self) {
-        let frame_data = &self.frame_data[self.frame_count as usize % FRAME_OVERLAP];
+        let frame_index = self.frame_count as usize % FRAME_OVERLAP;
+        let frame_data = &self.frame_data[frame_index];
 
         self.device
             .wait_for_fences(&[frame_data.render_fence], true, std::u64::MAX)
@@ -866,7 +870,7 @@ impl VkEngine {
         let offset =
             Self::return_aligned_size(self.physical_device_properties, size_of::<SceneData>())
                 as u64
-                * (self.frame_count as usize % FRAME_OVERLAP) as u64;
+                * frame_index as u64;
 
         let scene_data_ptr = self
             .device
@@ -911,7 +915,8 @@ impl VkEngine {
     }
 
     unsafe fn draw_objects(&self) {
-        let frame_data = &self.frame_data[self.frame_count as usize % FRAME_OVERLAP];
+        let frame_index = self.frame_count as usize % FRAME_OVERLAP;
+        let frame_data = &self.frame_data[frame_index];
 
         let view = Mat4::look_at_rh(
             self.camera.pos,
@@ -955,13 +960,18 @@ impl VkEngine {
                     self.materials[material_key].pipeline,
                 );
                 last_material_key = material_key.clone();
+
+                let uniform_offset = Self::return_aligned_size(
+                    self.physical_device_properties,
+                    size_of::<SceneData>() * frame_index,
+                ) as u32;
                 self.device.cmd_bind_descriptor_sets(
                     frame_data.command_buffer,
                     vk::PipelineBindPoint::GRAPHICS,
                     self.materials[material_key].pipeline_layout,
                     0,
                     &[frame_data.global_descriptor],
-                    &[],
+                    &[uniform_offset],
                 )
             }
 
