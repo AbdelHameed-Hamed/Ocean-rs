@@ -679,3 +679,17 @@ pub fn create_depth_stencil_create_info() -> vk::PipelineDepthStencilStateCreate
         .stencil_test_enable(false)
         .build();
 }
+
+pub fn descriptor_set_layout_binding(
+    desc_type: vk::DescriptorType,
+    binding: u32,
+    desc_count: u32,
+    stage_flags: vk::ShaderStageFlags,
+) -> vk::DescriptorSetLayoutBinding {
+    return vk::DescriptorSetLayoutBinding::builder()
+        .descriptor_type(desc_type)
+        .binding(binding)
+        .descriptor_count(desc_count)
+        .stage_flags(stage_flags)
+        .build();
+}

@@ -1,7 +1,7 @@
 extern crate ash;
 extern crate sdl2;
 
-use crate::math::{Mat4, Vec3};
+use crate::math::{Mat4, Vec3, Vec4};
 use crate::obj_loader::read_obj_file;
 use crate::vk_initializers;
 
@@ -48,6 +48,14 @@ struct RenderObject {
     mesh_key: String,
     material_key: String,
     transformation_matrix: Mat4,
+}
+
+struct SceneData {
+    fog_col: Vec4,
+    fog_distances: Vec4,
+    ambient_color: Vec4,
+    sun_light_dir: Vec4,
+    sun_light_col: Vec4,
 }
 
 const FRAME_OVERLAP: usize = 2;
@@ -206,6 +214,7 @@ pub struct VkEngine {
     debug_callback: vk::DebugUtilsMessengerEXT,
     surface: vk::SurfaceKHR,
     surface_loader: Surface,
+    physical_device_properties: vk::PhysicalDeviceProperties,
     device: Device,
     swapchain_loader: Swapchain,
     swapchain: vk::SwapchainKHR,
@@ -218,6 +227,8 @@ pub struct VkEngine {
     global_set_layout: vk::DescriptorSetLayout,
     descriptor_pool: vk::DescriptorPool,
     frame_data: [FrameData; FRAME_OVERLAP],
+    scene_data: SceneData,
+    scene_data_buffer: VkBuffer,
     triangle_vertex_shader_module: vk::ShaderModule,
     triangle_fragment_shader_module: vk::ShaderModule,
     meshes: HashMap<String, Mesh>,
@@ -245,6 +256,9 @@ impl VkEngine {
                 &surface_loader,
                 &surface,
             );
+
+        let physical_device_properties =
+            unsafe { instance.get_physical_device_properties(physical_device) };
 
         let device =
             vk_initializers::create_device(queue_family_index, &instance, &physical_device);
@@ -321,14 +335,21 @@ impl VkEngine {
 
         let graphics_queue = unsafe { device.get_device_queue(queue_family_index, 0) };
 
-        let camera_buffer_binding = vk::DescriptorSetLayoutBinding::builder()
-            .binding(0)
-            .descriptor_count(1)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .stage_flags(vk::ShaderStageFlags::VERTEX)
-            .build();
+        let camera_buffer_binding = vk_initializers::descriptor_set_layout_binding(
+            vk::DescriptorType::UNIFORM_BUFFER,
+            0,
+            1,
+            vk::ShaderStageFlags::VERTEX,
+        );
+        let scene_buffer_binding = vk_initializers::descriptor_set_layout_binding(
+            vk::DescriptorType::UNIFORM_BUFFER,
+            1,
+            1,
+            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+        );
+
         let global_set_info = vk::DescriptorSetLayoutCreateInfo::builder()
-            .bindings(&[camera_buffer_binding])
+            .bindings(&[camera_buffer_binding, scene_buffer_binding])
             .build();
         let global_set_layout = unsafe {
             device
@@ -348,6 +369,17 @@ impl VkEngine {
                 .create_descriptor_pool(&descriptor_pool_info, None)
                 .unwrap()
         };
+
+        let scene_param_buffer_size = FRAME_OVERLAP
+            * Self::return_aligned_size(physical_device_properties, size_of::<SceneData>());
+        let (scene_param_buffer, scene_param_buffer_memory) = vk_initializers::create_buffer(
+            &instance,
+            physical_device,
+            &device,
+            scene_param_buffer_size as u64,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        );
 
         let mut frame_data: [FrameData; FRAME_OVERLAP] = unsafe { std::mem::zeroed() };
         for i in 0..FRAME_OVERLAP {
@@ -392,19 +424,36 @@ impl VkEngine {
                     .unwrap()[0]
             };
 
-            let buffer_info = vk::DescriptorBufferInfo::builder()
+            let camera_buffer_info = vk::DescriptorBufferInfo::builder()
                 .buffer(camera_buffer)
                 .offset(0)
                 .range(uniform_size)
                 .build();
 
-            let set_write = vk::WriteDescriptorSet::builder()
+            let scene_buffer_info = vk::DescriptorBufferInfo::builder()
+                .buffer(scene_param_buffer)
+                .offset(Self::return_aligned_size(
+                    physical_device_properties,
+                    uniform_size as usize * i,
+                ) as u64)
+                .range(size_of::<SceneData>() as u64)
+                .build();
+
+            let camera_set_write = vk::WriteDescriptorSet::builder()
                 .dst_binding(0)
                 .dst_set(descriptor_set)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(&[buffer_info])
+                .buffer_info(&[camera_buffer_info])
                 .build();
-            unsafe { device.update_descriptor_sets(&[set_write], &[]) };
+
+            let scene_set_write = vk::WriteDescriptorSet::builder()
+                .dst_binding(1)
+                .dst_set(descriptor_set)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(&[scene_buffer_info])
+                .build();
+
+            unsafe { device.update_descriptor_sets(&[camera_set_write, scene_set_write], &[]) };
 
             frame_data[i] = FrameData {
                 present_semaphore,
@@ -487,14 +536,14 @@ impl VkEngine {
 
         let triangle_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
 
-        let monkey_mesh = VkEngine::load_and_upload_mesh(
+        let monkey_mesh = Self::load_and_upload_mesh(
             &instance,
             physical_device,
             &device,
             "./assets/models/monkey.obj",
         );
 
-        let triangle_mesh = VkEngine::load_and_upload_mesh(
+        let triangle_mesh = Self::load_and_upload_mesh(
             &instance,
             physical_device,
             &device,
@@ -558,6 +607,7 @@ impl VkEngine {
             debug_callback,
             surface,
             surface_loader,
+            physical_device_properties,
             device,
             swapchain_loader,
             swapchain,
@@ -570,6 +620,11 @@ impl VkEngine {
             global_set_layout,
             descriptor_pool,
             frame_data,
+            scene_data: unsafe { std::mem::zeroed() },
+            scene_data_buffer: VkBuffer {
+                buffer: scene_param_buffer,
+                buffer_memory: scene_param_buffer_memory,
+            },
             triangle_vertex_shader_module,
             triangle_fragment_shader_module,
             meshes: mesh_map,
@@ -578,6 +633,22 @@ impl VkEngine {
             camera,
             last_timestamp: std::time::Instant::now(),
         };
+    }
+
+    fn return_aligned_size(
+        physical_device_properties: vk::PhysicalDeviceProperties,
+        original_size: usize,
+    ) -> usize {
+        let min_ubo_alignment = physical_device_properties
+            .limits
+            .min_uniform_buffer_offset_alignment as usize;
+        let aligned_size = if min_ubo_alignment > 0 {
+            (original_size + min_ubo_alignment - 1) & !(min_ubo_alignment - 1)
+        } else {
+            original_size
+        };
+
+        return aligned_size;
     }
 
     fn load_and_upload_mesh(
@@ -658,6 +729,11 @@ impl VkEngine {
             .destroy_descriptor_set_layout(self.global_set_layout, None);
         self.device
             .destroy_descriptor_pool(self.descriptor_pool, None);
+
+        self.device
+            .destroy_buffer(self.scene_data_buffer.buffer, None);
+        self.device
+            .free_memory(self.scene_data_buffer.buffer_memory, None);
 
         for frame_data in self.frame_data.iter() {
             self.device
@@ -778,6 +854,33 @@ impl VkEngine {
             vk::SubpassContents::INLINE,
         );
 
+        let frame = self.frame_count as f32 / 120.0f32;
+        let mut scene_data: SceneData = std::mem::zeroed();
+        scene_data.ambient_color = Vec4 {
+            x: frame.sin(),
+            y: 0.0,
+            z: frame.cos(),
+            w: 1.0,
+        };
+
+        let offset =
+            Self::return_aligned_size(self.physical_device_properties, size_of::<SceneData>())
+                as u64
+                * (self.frame_count as usize % FRAME_OVERLAP) as u64;
+
+        let scene_data_ptr = self
+            .device
+            .map_memory(
+                self.scene_data_buffer.buffer_memory,
+                offset,
+                size_of::<SceneData>() as u64,
+                vk::MemoryMapFlags::empty(),
+            )
+            .unwrap() as *mut SceneData;
+        scene_data_ptr.copy_from_nonoverlapping([scene_data].as_ptr(), 1);
+        self.device
+            .unmap_memory(self.scene_data_buffer.buffer_memory);
+
         self.draw_objects();
 
         self.device.cmd_end_render_pass(frame_data.command_buffer);
@@ -823,6 +926,21 @@ impl VkEngine {
             100.0,
         );
 
+        let transforms = [view, projection];
+
+        let camera_data_ptr = self
+            .device
+            .map_memory(
+                frame_data.camera_buffer.buffer_memory,
+                0,
+                (size_of::<Mat4>() * transforms.len()) as u64,
+                vk::MemoryMapFlags::empty(),
+            )
+            .unwrap() as *mut Mat4;
+        camera_data_ptr.copy_from_nonoverlapping(transforms.as_ptr(), transforms.len());
+        self.device
+            .unmap_memory(frame_data.camera_buffer.buffer_memory);
+
         let (mut last_mesh_key, mut last_material_key) = ("".to_string(), "".to_string());
         for RenderObject {
             mesh_key,
@@ -862,21 +980,6 @@ impl VkEngine {
                 );
                 last_mesh_key = mesh_key.clone();
             }
-
-            let transforms = [view, projection];
-
-            let camera_data_ptr = self
-                .device
-                .map_memory(
-                    frame_data.camera_buffer.buffer_memory,
-                    0,
-                    (size_of::<Mat4>() * transforms.len()) as u64,
-                    vk::MemoryMapFlags::empty(),
-                )
-                .unwrap() as *mut Mat4;
-            camera_data_ptr.copy_from_nonoverlapping(transforms.as_ptr(), transforms.len());
-            self.device
-                .unmap_memory(frame_data.camera_buffer.buffer_memory);
 
             self.device.cmd_push_constants(
                 frame_data.command_buffer,
