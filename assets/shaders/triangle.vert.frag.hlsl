@@ -26,10 +26,16 @@ cbuffer SceneData: register(b1) {
     float4 sunlight_color;
 };
 
-VSOut vs_main(VSIn input) {
+struct Model {
+    float4x4 model;
+};
+
+StructuredBuffer<Model> models: register(t0, space1);
+
+VSOut vs_main(VSIn input, [[vk::builtin("BaseInstance")]] uint instance: GARBAGE) {
     VSOut output = {
         mul(
-            mul(projection, mul(view, model_data.model_matrix)),
+            mul(projection, mul(view, models[instance].model)),
             float4(input.position, 1.0f)
         ),
         float4(input.color, 1.0f)

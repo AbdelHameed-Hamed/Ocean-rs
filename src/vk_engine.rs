@@ -59,6 +59,7 @@ struct SceneData {
 }
 
 const FRAME_OVERLAP: usize = 2;
+const MAX_OBJECTS: usize = 10_000;
 
 struct FrameData {
     present_semaphore: vk::Semaphore,
@@ -67,7 +68,9 @@ struct FrameData {
     command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
     camera_buffer: VkBuffer,
+    object_buffer: VkBuffer,
     global_descriptor: vk::DescriptorSet,
+    object_descriptor: vk::DescriptorSet,
 }
 
 impl Vertex {
@@ -225,9 +228,9 @@ pub struct VkEngine {
     framebuffers: Vec<vk::Framebuffer>,
     graphics_queue: vk::Queue,
     global_set_layout: vk::DescriptorSetLayout,
+    object_set_layout: vk::DescriptorSetLayout,
     descriptor_pool: vk::DescriptorPool,
     frame_data: [FrameData; FRAME_OVERLAP],
-    scene_data: SceneData,
     scene_data_buffer: VkBuffer,
     triangle_vertex_shader_module: vk::ShaderModule,
     triangle_fragment_shader_module: vk::ShaderModule,
@@ -357,6 +360,22 @@ impl VkEngine {
                 .unwrap()
         };
 
+        let object_buffer_binding = vk_initializers::descriptor_set_layout_binding(
+            vk::DescriptorType::STORAGE_BUFFER,
+            0,
+            1,
+            vk::ShaderStageFlags::VERTEX,
+        );
+
+        let object_set_info = vk::DescriptorSetLayoutCreateInfo::builder()
+            .bindings(&[object_buffer_binding])
+            .build();
+        let object_set_layout = unsafe {
+            device
+                .create_descriptor_set_layout(&object_set_info, None)
+                .unwrap()
+        };
+
         let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
             .max_sets(10)
             .pool_sizes(&[
@@ -366,6 +385,10 @@ impl VkEngine {
                     .build(),
                 vk::DescriptorPoolSize::builder()
                     .ty(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
+                    .descriptor_count(10)
+                    .build(),
+                vk::DescriptorPoolSize::builder()
+                    .ty(vk::DescriptorType::STORAGE_BUFFER)
                     .descriptor_count(10)
                     .build(),
             ])
@@ -420,13 +443,32 @@ impl VkEngine {
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             );
 
-            let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
+            let (object_buffer, object_buffer_memory) = vk_initializers::create_buffer(
+                &instance,
+                physical_device,
+                &device,
+                (size_of::<Mat4>() * MAX_OBJECTS) as u64,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            );
+
+            let global_descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
                 .descriptor_pool(descriptor_pool)
                 .set_layouts(&[global_set_layout])
                 .build();
-            let descriptor_set = unsafe {
+            let global_descriptor_set = unsafe {
                 device
-                    .allocate_descriptor_sets(&descriptor_set_allocate_info)
+                    .allocate_descriptor_sets(&global_descriptor_set_allocate_info)
+                    .unwrap()[0]
+            };
+
+            let object_descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
+                .descriptor_pool(descriptor_pool)
+                .set_layouts(&[object_set_layout])
+                .build();
+            let object_descriptor_set = unsafe {
+                device
+                    .allocate_descriptor_sets(&object_descriptor_set_allocate_info)
                     .unwrap()[0]
             };
 
@@ -442,21 +484,39 @@ impl VkEngine {
                 .range(size_of::<SceneData>() as u64)
                 .build();
 
+            let object_buffer_info = vk::DescriptorBufferInfo::builder()
+                .buffer(object_buffer)
+                .offset(0)
+                .range((size_of::<Mat4>() * MAX_OBJECTS) as u64)
+                .build();
+
             let camera_set_write = vk::WriteDescriptorSet::builder()
                 .dst_binding(0)
-                .dst_set(descriptor_set)
+                .dst_set(global_descriptor_set)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                 .buffer_info(&[camera_buffer_info])
                 .build();
 
             let scene_set_write = vk::WriteDescriptorSet::builder()
                 .dst_binding(1)
-                .dst_set(descriptor_set)
+                .dst_set(global_descriptor_set)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
                 .buffer_info(&[scene_buffer_info])
                 .build();
 
-            unsafe { device.update_descriptor_sets(&[camera_set_write, scene_set_write], &[]) };
+            let object_set_write = vk::WriteDescriptorSet::builder()
+                .dst_binding(0)
+                .dst_set(object_descriptor_set)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(&[object_buffer_info])
+                .build();
+
+            unsafe {
+                device.update_descriptor_sets(
+                    &[camera_set_write, scene_set_write, object_set_write],
+                    &[],
+                )
+            };
 
             frame_data[i] = FrameData {
                 present_semaphore,
@@ -468,7 +528,12 @@ impl VkEngine {
                     buffer: camera_buffer,
                     buffer_memory: camera_buffer_memory,
                 },
-                global_descriptor: descriptor_set,
+                object_buffer: VkBuffer {
+                    buffer: object_buffer,
+                    buffer_memory: object_buffer_memory,
+                },
+                global_descriptor: global_descriptor_set,
+                object_descriptor: object_descriptor_set,
             };
         }
 
@@ -480,7 +545,7 @@ impl VkEngine {
                             .size(size_of::<Mat4>() as u32)
                             .stage_flags(vk::ShaderStageFlags::VERTEX)
                             .build()])
-                        .set_layouts(&[global_set_layout])
+                        .set_layouts(&[global_set_layout, object_set_layout])
                         .build(),
                     None,
                 )
@@ -621,9 +686,9 @@ impl VkEngine {
             framebuffers,
             graphics_queue,
             global_set_layout,
+            object_set_layout,
             descriptor_pool,
             frame_data,
-            scene_data: unsafe { std::mem::zeroed() },
             scene_data_buffer: VkBuffer {
                 buffer: scene_param_buffer,
                 buffer_memory: scene_param_buffer_memory,
@@ -731,6 +796,8 @@ impl VkEngine {
         self.device
             .destroy_descriptor_set_layout(self.global_set_layout, None);
         self.device
+            .destroy_descriptor_set_layout(self.object_set_layout, None);
+        self.device
             .destroy_descriptor_pool(self.descriptor_pool, None);
 
         self.device
@@ -752,6 +819,11 @@ impl VkEngine {
                 .destroy_buffer(frame_data.camera_buffer.buffer, None);
             self.device
                 .free_memory(frame_data.camera_buffer.buffer_memory, None);
+
+            self.device
+                .destroy_buffer(frame_data.object_buffer.buffer, None);
+            self.device
+                .free_memory(frame_data.object_buffer.buffer_memory, None);
         }
         for &framebuffer in self.framebuffers.iter() {
             self.device.destroy_framebuffer(framebuffer, None);
@@ -885,6 +957,26 @@ impl VkEngine {
         self.device
             .unmap_memory(self.scene_data_buffer.buffer_memory);
 
+        let object_data_ptr = self
+            .device
+            .map_memory(
+                self.frame_data[frame_index].object_buffer.buffer_memory,
+                0,
+                (self.renderables.len() * size_of::<Mat4>()) as u64,
+                vk::MemoryMapFlags::empty(),
+            )
+            .unwrap() as *mut Mat4;
+        let object_matrices = self
+            .renderables
+            .iter()
+            .map(|renderable| -> Mat4 {
+                return renderable.transformation_matrix;
+            })
+            .collect::<Vec<Mat4>>();
+        object_data_ptr.copy_from_nonoverlapping(object_matrices.as_ptr(), object_matrices.len());
+        self.device
+            .unmap_memory(self.frame_data[frame_index].object_buffer.buffer_memory);
+
         self.draw_objects();
 
         self.device.cmd_end_render_pass(frame_data.command_buffer);
@@ -947,11 +1039,14 @@ impl VkEngine {
             .unmap_memory(frame_data.camera_buffer.buffer_memory);
 
         let (mut last_mesh_key, mut last_material_key) = ("".to_string(), "".to_string());
-        for RenderObject {
-            mesh_key,
-            material_key,
-            transformation_matrix,
-        } in self.renderables.iter()
+        for (
+            i,
+            RenderObject {
+                mesh_key,
+                material_key,
+                transformation_matrix,
+            },
+        ) in self.renderables.iter().enumerate()
         {
             if *material_key != last_material_key {
                 self.device.cmd_bind_pipeline(
@@ -972,7 +1067,16 @@ impl VkEngine {
                     0,
                     &[frame_data.global_descriptor],
                     &[uniform_offset],
-                )
+                );
+
+                self.device.cmd_bind_descriptor_sets(
+                    frame_data.command_buffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.materials[material_key].pipeline_layout,
+                    1,
+                    &[frame_data.object_descriptor],
+                    &[],
+                );
             }
 
             if *mesh_key != last_mesh_key {
@@ -1005,7 +1109,7 @@ impl VkEngine {
                 1,
                 0,
                 0,
-                0,
+                i as u32,
             );
         }
     }
