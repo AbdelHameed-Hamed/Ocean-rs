@@ -8,11 +8,6 @@ struct VSOut {
     float4 color: COLOR;
 };
 
-[[vk::push_constant]]
-struct {
-    column_major float4x4 model_matrix;
-} model_data;
-
 cbuffer Transforms: register(b0) {
     column_major float4x4 view;
     column_major float4x4 projection;

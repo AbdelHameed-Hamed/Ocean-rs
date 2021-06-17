@@ -541,10 +541,6 @@ impl VkEngine {
             device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::builder()
-                        .push_constant_ranges(&[vk::PushConstantRange::builder()
-                            .size(size_of::<Mat4>() as u32)
-                            .stage_flags(vk::ShaderStageFlags::VERTEX)
-                            .build()])
                         .set_layouts(&[global_set_layout, object_set_layout])
                         .build(),
                     None,
@@ -1094,14 +1090,6 @@ impl VkEngine {
                 );
                 last_mesh_key = mesh_key.clone();
             }
-
-            self.device.cmd_push_constants(
-                frame_data.command_buffer,
-                self.materials[material_key].pipeline_layout,
-                vk::ShaderStageFlags::VERTEX,
-                0,
-                &[*transformation_matrix].align_to::<u8>().1, // Forgive me, father, for I have sinned.
-            );
 
             self.device.cmd_draw_indexed(
                 frame_data.command_buffer,
