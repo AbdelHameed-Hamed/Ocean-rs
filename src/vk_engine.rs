@@ -51,6 +51,8 @@ struct RenderObject {
 }
 
 struct SceneData {
+    view: Mat4,
+    projection: Mat4,
     fog_col: Vec4,
     fog_distances: Vec4,
     ambient_color: Vec4,
@@ -67,7 +69,6 @@ struct FrameData {
     render_fence: vk::Fence,
     command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
-    camera_buffer: VkBuffer,
     object_buffer: VkBuffer,
     global_descriptor: vk::DescriptorSet,
     object_descriptor: vk::DescriptorSet,
@@ -338,21 +339,15 @@ impl VkEngine {
 
         let graphics_queue = unsafe { device.get_device_queue(queue_family_index, 0) };
 
-        let camera_buffer_binding = vk_initializers::descriptor_set_layout_binding(
-            vk::DescriptorType::UNIFORM_BUFFER,
-            0,
-            1,
-            vk::ShaderStageFlags::VERTEX,
-        );
         let scene_buffer_binding = vk_initializers::descriptor_set_layout_binding(
             vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
-            1,
+            0,
             1,
             vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
         );
 
         let global_set_info = vk::DescriptorSetLayoutCreateInfo::builder()
-            .bindings(&[camera_buffer_binding, scene_buffer_binding])
+            .bindings(&[scene_buffer_binding])
             .build();
         let global_set_layout = unsafe {
             device
@@ -379,10 +374,6 @@ impl VkEngine {
         let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
             .max_sets(10)
             .pool_sizes(&[
-                vk::DescriptorPoolSize::builder()
-                    .ty(vk::DescriptorType::UNIFORM_BUFFER)
-                    .descriptor_count(10)
-                    .build(),
                 vk::DescriptorPoolSize::builder()
                     .ty(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
                     .descriptor_count(10)
@@ -432,17 +423,6 @@ impl VkEngine {
             let (command_pool, command_buffers) =
                 vk_initializers::create_command_pool_and_buffer(queue_family_index, &device);
 
-            let uniform_size = size_of::<[Mat4; 2]>() as u64;
-
-            let (camera_buffer, camera_buffer_memory) = vk_initializers::create_buffer(
-                &instance,
-                physical_device,
-                &device,
-                uniform_size,
-                vk::BufferUsageFlags::UNIFORM_BUFFER,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            );
-
             let (object_buffer, object_buffer_memory) = vk_initializers::create_buffer(
                 &instance,
                 physical_device,
@@ -472,12 +452,6 @@ impl VkEngine {
                     .unwrap()[0]
             };
 
-            let camera_buffer_info = vk::DescriptorBufferInfo::builder()
-                .buffer(camera_buffer)
-                .offset(0)
-                .range(uniform_size)
-                .build();
-
             let scene_buffer_info = vk::DescriptorBufferInfo::builder()
                 .buffer(scene_param_buffer)
                 .offset(0)
@@ -490,15 +464,8 @@ impl VkEngine {
                 .range((size_of::<Mat4>() * MAX_OBJECTS) as u64)
                 .build();
 
-            let camera_set_write = vk::WriteDescriptorSet::builder()
-                .dst_binding(0)
-                .dst_set(global_descriptor_set)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(&[camera_buffer_info])
-                .build();
-
             let scene_set_write = vk::WriteDescriptorSet::builder()
-                .dst_binding(1)
+                .dst_binding(0)
                 .dst_set(global_descriptor_set)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
                 .buffer_info(&[scene_buffer_info])
@@ -511,12 +478,7 @@ impl VkEngine {
                 .buffer_info(&[object_buffer_info])
                 .build();
 
-            unsafe {
-                device.update_descriptor_sets(
-                    &[camera_set_write, scene_set_write, object_set_write],
-                    &[],
-                )
-            };
+            unsafe { device.update_descriptor_sets(&[scene_set_write, object_set_write], &[]) };
 
             frame_data[i] = FrameData {
                 present_semaphore,
@@ -524,10 +486,6 @@ impl VkEngine {
                 render_fence,
                 command_pool,
                 command_buffer: command_buffers[0],
-                camera_buffer: VkBuffer {
-                    buffer: camera_buffer,
-                    buffer_memory: camera_buffer_memory,
-                },
                 object_buffer: VkBuffer {
                     buffer: object_buffer,
                     buffer_memory: object_buffer_memory,
@@ -812,11 +770,6 @@ impl VkEngine {
                 .destroy_command_pool(frame_data.command_pool, None);
 
             self.device
-                .destroy_buffer(frame_data.camera_buffer.buffer, None);
-            self.device
-                .free_memory(frame_data.camera_buffer.buffer_memory, None);
-
-            self.device
                 .destroy_buffer(frame_data.object_buffer.buffer, None);
             self.device
                 .free_memory(frame_data.object_buffer.buffer_memory, None);
@@ -927,7 +880,20 @@ impl VkEngine {
         );
 
         let frame = self.frame_count as f32 / 120.0f32;
+        let view = Mat4::look_at_rh(
+            self.camera.pos,
+            self.camera.pos + self.camera.front,
+            self.camera.up,
+        );
+        let projection = Mat4::prespective(
+            self.camera.fov,
+            self.size.width as f32 / self.size.height as f32,
+            0.1,
+            100.0,
+        );
         let mut scene_data: SceneData = std::mem::zeroed();
+        scene_data.view = view;
+        scene_data.projection = projection;
         scene_data.ambient_color = Vec4 {
             x: frame.sin(),
             y: 0.0,
@@ -935,16 +901,15 @@ impl VkEngine {
             w: 1.0,
         };
 
-        let offset =
-            Self::return_aligned_size(self.physical_device_properties, size_of::<SceneData>())
-                as u64
-                * frame_index as u64;
+        let scene_data_offset =
+            (Self::return_aligned_size(self.physical_device_properties, size_of::<SceneData>())
+                * frame_index) as u64;
 
         let scene_data_ptr = self
             .device
             .map_memory(
                 self.scene_data_buffer.buffer_memory,
-                offset,
+                scene_data_offset,
                 size_of::<SceneData>() as u64,
                 vk::MemoryMapFlags::empty(),
             )
@@ -1006,41 +971,13 @@ impl VkEngine {
         let frame_index = self.frame_count as usize % FRAME_OVERLAP;
         let frame_data = &self.frame_data[frame_index];
 
-        let view = Mat4::look_at_rh(
-            self.camera.pos,
-            self.camera.pos + self.camera.front,
-            self.camera.up,
-        );
-
-        let projection = Mat4::prespective(
-            self.camera.fov,
-            self.size.width as f32 / self.size.height as f32,
-            0.1,
-            100.0,
-        );
-
-        let transforms = [view, projection];
-
-        let camera_data_ptr = self
-            .device
-            .map_memory(
-                frame_data.camera_buffer.buffer_memory,
-                0,
-                (size_of::<Mat4>() * transforms.len()) as u64,
-                vk::MemoryMapFlags::empty(),
-            )
-            .unwrap() as *mut Mat4;
-        camera_data_ptr.copy_from_nonoverlapping(transforms.as_ptr(), transforms.len());
-        self.device
-            .unmap_memory(frame_data.camera_buffer.buffer_memory);
-
         let (mut last_mesh_key, mut last_material_key) = ("".to_string(), "".to_string());
         for (
             i,
             RenderObject {
                 mesh_key,
                 material_key,
-                transformation_matrix,
+                ..
             },
         ) in self.renderables.iter().enumerate()
         {
@@ -1052,7 +989,7 @@ impl VkEngine {
                 );
                 last_material_key = material_key.clone();
 
-                let uniform_offset = Self::return_aligned_size(
+                let scene_data_offset = Self::return_aligned_size(
                     self.physical_device_properties,
                     size_of::<SceneData>() * frame_index,
                 ) as u32;
@@ -1062,7 +999,7 @@ impl VkEngine {
                     self.materials[material_key].pipeline_layout,
                     0,
                     &[frame_data.global_descriptor],
-                    &[uniform_offset],
+                    &[scene_data_offset],
                 );
 
                 self.device.cmd_bind_descriptor_sets(

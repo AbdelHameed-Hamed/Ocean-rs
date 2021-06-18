@@ -8,12 +8,9 @@ struct VSOut {
     float4 color: COLOR;
 };
 
-cbuffer Transforms: register(b0) {
+cbuffer SceneData: register(b0) {
     column_major float4x4 view;
     column_major float4x4 projection;
-};
-
-cbuffer SceneData: register(b1) {
     float4 fog_color; // w is for exponent
     float4 fog_distances; //x for min, y for max, zw unused.
     float4 ambient_color;
