@@ -70,7 +70,6 @@ struct FrameData {
     command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
     object_buffer: VkBuffer,
-    global_descriptor: vk::DescriptorSet,
     object_descriptor: vk::DescriptorSet,
 }
 
@@ -229,6 +228,7 @@ pub struct VkEngine {
     framebuffers: Vec<vk::Framebuffer>,
     graphics_queue: vk::Queue,
     global_set_layout: vk::DescriptorSetLayout,
+    global_descriptor_set: vk::DescriptorSet,
     object_set_layout: vk::DescriptorSetLayout,
     descriptor_pool: vk::DescriptorPool,
     frame_data: [FrameData; FRAME_OVERLAP],
@@ -383,11 +383,22 @@ impl VkEngine {
                     .descriptor_count(10)
                     .build(),
             ])
+            .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
             .build();
         let descriptor_pool = unsafe {
             device
                 .create_descriptor_pool(&descriptor_pool_info, None)
                 .unwrap()
+        };
+
+        let global_descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&[global_set_layout])
+            .build();
+        let global_descriptor_set = unsafe {
+            device
+                .allocate_descriptor_sets(&global_descriptor_set_allocate_info)
+                .unwrap()[0]
         };
 
         let scene_param_buffer_size = FRAME_OVERLAP
@@ -400,6 +411,21 @@ impl VkEngine {
             vk::BufferUsageFlags::UNIFORM_BUFFER,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         );
+
+        let scene_buffer_info = vk::DescriptorBufferInfo::builder()
+            .buffer(scene_param_buffer)
+            .offset(0)
+            .range(size_of::<SceneData>() as u64)
+            .build();
+
+        let scene_set_write = vk::WriteDescriptorSet::builder()
+            .dst_binding(0)
+            .dst_set(global_descriptor_set)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
+            .buffer_info(&[scene_buffer_info])
+            .build();
+
+        unsafe { device.update_descriptor_sets(&[scene_set_write], &[]) };
 
         let mut frame_data: [FrameData; FRAME_OVERLAP] = unsafe { std::mem::zeroed() };
         for i in 0..FRAME_OVERLAP {
@@ -432,16 +458,6 @@ impl VkEngine {
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             );
 
-            let global_descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
-                .descriptor_pool(descriptor_pool)
-                .set_layouts(&[global_set_layout])
-                .build();
-            let global_descriptor_set = unsafe {
-                device
-                    .allocate_descriptor_sets(&global_descriptor_set_allocate_info)
-                    .unwrap()[0]
-            };
-
             let object_descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
                 .descriptor_pool(descriptor_pool)
                 .set_layouts(&[object_set_layout])
@@ -452,23 +468,10 @@ impl VkEngine {
                     .unwrap()[0]
             };
 
-            let scene_buffer_info = vk::DescriptorBufferInfo::builder()
-                .buffer(scene_param_buffer)
-                .offset(0)
-                .range(size_of::<SceneData>() as u64)
-                .build();
-
             let object_buffer_info = vk::DescriptorBufferInfo::builder()
                 .buffer(object_buffer)
                 .offset(0)
                 .range((size_of::<Mat4>() * MAX_OBJECTS) as u64)
-                .build();
-
-            let scene_set_write = vk::WriteDescriptorSet::builder()
-                .dst_binding(0)
-                .dst_set(global_descriptor_set)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
-                .buffer_info(&[scene_buffer_info])
                 .build();
 
             let object_set_write = vk::WriteDescriptorSet::builder()
@@ -478,7 +481,7 @@ impl VkEngine {
                 .buffer_info(&[object_buffer_info])
                 .build();
 
-            unsafe { device.update_descriptor_sets(&[scene_set_write, object_set_write], &[]) };
+            unsafe { device.update_descriptor_sets(&[object_set_write], &[]) };
 
             frame_data[i] = FrameData {
                 present_semaphore,
@@ -490,7 +493,6 @@ impl VkEngine {
                     buffer: object_buffer,
                     buffer_memory: object_buffer_memory,
                 },
-                global_descriptor: global_descriptor_set,
                 object_descriptor: object_descriptor_set,
             };
         }
@@ -640,6 +642,7 @@ impl VkEngine {
             framebuffers,
             graphics_queue,
             global_set_layout,
+            global_descriptor_set,
             object_set_layout,
             descriptor_pool,
             frame_data,
@@ -998,7 +1001,7 @@ impl VkEngine {
                     vk::PipelineBindPoint::GRAPHICS,
                     self.materials[material_key].pipeline_layout,
                     0,
-                    &[frame_data.global_descriptor],
+                    &[self.global_descriptor_set],
                     &[scene_data_offset],
                 );
 
