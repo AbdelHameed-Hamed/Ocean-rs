@@ -1,11 +1,11 @@
 struct VSIn {
-    float3 position: POSITION;
-    float3 color: COLOR;
+    float3 position: Position;
+    float3 color: Color;
 };
 
 struct VSOut {
-    float4 position: SV_POSITION;
-    float4 color: COLOR;
+    float4 position: SV_Position;
+    float4 color: Color;
 };
 
 cbuffer SceneData: register(b0) {
@@ -24,7 +24,7 @@ struct Model {
 
 StructuredBuffer<Model> models: register(t0, space1);
 
-VSOut vs_main(VSIn input, [[vk::builtin("BaseInstance")]] uint instance: GARBAGE) {
+VSOut vs_main(VSIn input, [[vk::builtin("BaseInstance")]] uint instance: Garbage) {
     VSOut output = {
         mul(
             mul(projection, mul(view, models[instance].model)),
@@ -35,6 +35,6 @@ VSOut vs_main(VSIn input, [[vk::builtin("BaseInstance")]] uint instance: GARBAGE
     return output;
 }
 
-float4 fs_main(VSOut input) : SV_TARGET {
+float4 fs_main(VSOut input): SV_Target {
     return input.color + ambient_color;
 }

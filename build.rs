@@ -1,10 +1,10 @@
 use std::fs;
 use std::process::Command;
 
-fn main() {
-    // Example: dxc -T vs_6_0 -E vs_main -Zi -spirv
-    // ./assets/shaders/triangle.vert.frag.hlsl -Fo ./shaders/triangle.vert.spv
+// Example:
+// dxc -T vs_6_5 -E vs_main -Zi -spirv ./assets/shaders/triangle.vert.frag.hlsl -Fo ./shaders/triangle.vert
 
+fn main() {
     for entry in fs::read_dir("./assets/shaders/").expect("Path doesn't exist") {
         let entry = entry.unwrap();
         let path = entry.path();
@@ -29,24 +29,29 @@ fn main() {
                 ];
                 let output_file_name: String;
                 match *shader_type {
+                    "task" => {
+                        output_file_name = format!("./shaders/{}.task.spv", shader_name);
+                        command_args[1] = "as_6_5";
+                        command_args[3] = "ts_main";
+                    }
+                    "mesh" => {
+                        output_file_name = format!("./shaders/{}.mesh.spv", shader_name);
+                        command_args[1] = "ms_6_5";
+                        command_args[3] = "ms_main";
+                    }
                     "vert" => {
                         output_file_name = format!("./shaders/{}.vert.spv", shader_name);
-                        command_args[1] = "vs_6_0";
+                        command_args[1] = "vs_6_5";
                         command_args[3] = "vs_main";
                     }
                     "frag" => {
                         output_file_name = format!("./shaders/{}.frag.spv", shader_name);
-                        command_args[1] = "ps_6_0";
+                        command_args[1] = "ps_6_5";
                         command_args[3] = "fs_main";
-                    }
-                    "mesh" => {
-                        output_file_name = format!("./shaders/{}.mesh.spv", shader_name);
-                        command_args[1] = "ms_6_0";
-                        command_args[3] = "ms_main";
                     }
                     "comp" => {
                         output_file_name = format!("./shaders/{}.comp.spv", shader_name);
-                        command_args[1] = "cs_6_0";
+                        command_args[1] = "cs_6_5";
                         command_args[3] = "cs_main";
                     }
                     _ => {
