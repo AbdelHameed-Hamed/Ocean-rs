@@ -26,6 +26,7 @@ fn main() {
                     path.to_str().unwrap(),
                     "-Fo",
                     "INVALID",
+                    "-enable-16bit-types",
                 ];
                 let output_file_name: String;
                 match *shader_type {

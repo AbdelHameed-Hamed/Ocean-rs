@@ -14,16 +14,13 @@ struct Vertex {
 };
 
 struct Meshlet {
-    uint32_t vertex_count;
-    uint32_t vertex_offset;
-    uint32_t primitive_count;
-    uint32_t primitive_offset;
+    uint32_t vertices[64];
+    uint16_t indices[126];
+    uint16_t vertex_and_index_count;
 };
 
 StructuredBuffer<Meshlet> meshlets: register(t0, space1);
 StructuredBuffer<Vertex> vertices: register(t1, space1);
-StructuredBuffer<uint32_t> vertex_indices: register(t2, space1);
-StructuredBuffer<uint32_t> primitive_indices: register(t3, space1);
 
 struct OutputVertex {
     float4 pos: SV_Position;
@@ -31,32 +28,38 @@ struct OutputVertex {
 };
 
 [outputtopology("triangle")]
-[numthreads(128, 1, 1)]
+[numthreads(32, 1, 1)]
 void ms_main(
     in uint32_t group_id: SV_GroupID,
     in uint32_t group_thread_id: SV_GroupThreadID,
-    out vertices OutputVertex out_verts[128],
-    out indices uint32_t3 out_indices[128]) {
+    out vertices OutputVertex out_verts[64],
+    out indices uint32_t3 out_primitives[42]) {
     Meshlet meshlet = meshlets[group_id];
 
-    SetMeshOutputCounts(meshlet.vertex_count, meshlet.primitive_count);
+    uint32_t vertex_count = meshlet.vertex_and_index_count & 0xFF;
+    uint32_t index_count = meshlet.vertex_and_index_count >> 8;
+    uint32_t primitive_count = index_count / 3;
 
-    if (group_thread_id < meshlet.vertex_count) {
-        uint32_t vertex_idx = vertex_indices[meshlet.vertex_offset + group_thread_id];
-        Vertex vertex = vertices[vertex_idx];
+    SetMeshOutputCounts(vertex_count, primitive_count);
 
-        out_verts[group_thread_id].pos = mul(mul(projection, view), float4(vertex.pos, 1.0f));
-        out_verts[group_thread_id].col = float4(vertex.norm, 1.0f);
-    }
+    for (uint32_t offset = 0; offset < 2; ++offset) {
+        uint32_t idx = group_thread_id + (offset * 32);
+        if (idx < vertex_count) {
+            uint32_t vertex_idx = meshlet.vertices[idx];
+            Vertex vertex = vertices[vertex_idx];
 
-    if (group_thread_id < meshlet.primitive_count) {
-        uint32_t packed_indices = primitive_indices[meshlet.primitive_offset + group_thread_id];
+            out_verts[idx].pos = mul(mul(projection, view), float4(vertex.pos, 1.0f));
+            out_verts[idx].col = float4(vertex.norm, 1.0f);
+        }
 
-        out_indices[group_thread_id] = uint32_t3(
-             packed_indices        & 0xFF,
-            (packed_indices >> 8)  & 0xFF,
-            (packed_indices >> 16) & 0xFF
-        );
+        idx = (group_thread_id * 3) + (offset * 32);
+        if (idx < primitive_count) {
+            out_primitives[group_thread_id] = uint32_t3(
+                meshlet.indices[idx + 0],
+                meshlet.indices[idx + 1],
+                meshlet.indices[idx + 2]
+            );
+        }
     }
 }
 

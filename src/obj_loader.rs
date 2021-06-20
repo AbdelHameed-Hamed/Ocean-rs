@@ -11,7 +11,7 @@ pub fn read_obj_file(file_path: &str) -> (Vec<Vec3>, Vec<Vec3>, Vec<u32>) {
 
     for (i, line) in file_content
         .split(&['\r', '\n'][..])
-        .filter(|t| {
+        .filter(|t| -> bool {
             return *t != "";
         })
         .collect::<Vec<&str>>()
