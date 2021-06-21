@@ -4,12 +4,13 @@ extern crate sdl2;
 use ash::extensions::{
     ext::DebugUtils,
     khr::{Surface, Swapchain},
+    nv::{DeviceDiagnosticCheckpoints, MeshShader},
 };
 use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0};
 use ash::{vk, vk::Handle, Device, Entry, Instance};
 use sdl2::video::Window;
-use std::borrow::Cow;
 use std::ffi::{CStr, CString};
+use std::{borrow::Cow, ffi::c_void};
 
 pub fn create_sdl_window(width: u32, height: u32) -> (sdl2::Sdl, sdl2::video::Window) {
     let sdl_context = sdl2::init().unwrap();
@@ -173,11 +174,13 @@ pub fn create_device(
     instance: &Instance,
     physical_device: &vk::PhysicalDevice,
 ) -> Device {
-    let device_extensions_names_raw = [Swapchain::name().as_ptr()];
-    let features = vk::PhysicalDeviceFeatures {
-        shader_clip_distance: 1,
-        ..Default::default()
-    };
+    let device_extensions_names_raw = [
+        Swapchain::name().as_ptr(),
+        MeshShader::name().as_ptr(),
+        DeviceDiagnosticCheckpoints::name().as_ptr(),
+        "VK_KHR_16bit_storage".as_ptr() as *const i8,
+    ];
+
     let priorities = [1.0];
 
     let queue_info = [vk::DeviceQueueCreateInfo::builder()
@@ -185,10 +188,30 @@ pub fn create_device(
         .queue_priorities(&priorities)
         .build()];
 
+    let mut features16 = vk::PhysicalDevice16BitStorageFeatures::builder()
+        .storage_buffer16_bit_access(true)
+        .uniform_and_storage_buffer16_bit_access(true)
+        .build();
+    let mut features_mesh = vk::PhysicalDeviceMeshShaderFeaturesNV::builder()
+        .task_shader(true)
+        .mesh_shader(true)
+        .build();
+    let mut features = vk::PhysicalDeviceFeatures2::builder()
+        .features(
+            vk::PhysicalDeviceFeatures::builder()
+                .shader_clip_distance(true)
+                .shader_int16(true)
+                .build(),
+        )
+        .build();
+
     let device_create_info = vk::DeviceCreateInfo::builder()
         .queue_create_infos(&queue_info)
         .enabled_extension_names(&device_extensions_names_raw)
-        .enabled_features(&features);
+        .push_next(&mut features16)
+        .push_next(&mut features_mesh)
+        .push_next(&mut features)
+        .build();
 
     let device = unsafe {
         instance
@@ -399,37 +422,21 @@ pub fn create_command_pool_and_buffer(
     return (command_pool, command_buffer);
 }
 
-pub fn create_vertex_and_fragment_shader_modules(
-    device: &Device,
-) -> (vk::ShaderModule, vk::ShaderModule) {
-    let vertex_shader_binary_as_bytes = std::fs::read("shaders/triangle.vert.spv").unwrap();
+pub fn create_shader_module(device: &Device, filepath: &str) -> vk::ShaderModule {
+    let shader_binary_as_bytes = std::fs::read(filepath).unwrap();
     // !Note: This might bite me later due to endianess.
-    let (_, vertex_shader_binary, _) = unsafe { vertex_shader_binary_as_bytes.align_to::<u32>() };
+    let (_, shader_binary, _) = unsafe { shader_binary_as_bytes.align_to::<u32>() };
 
-    let vertex_shader_module_create_info = vk::ShaderModuleCreateInfo::builder()
-        .code(vertex_shader_binary)
+    let shader_module_create_info = vk::ShaderModuleCreateInfo::builder()
+        .code(shader_binary)
         .build();
-    let vertex_shader_module = unsafe {
+    let shader_module = unsafe {
         device
-            .create_shader_module(&vertex_shader_module_create_info, None)
+            .create_shader_module(&shader_module_create_info, None)
             .unwrap()
     };
 
-    let fragment_shader_binary_as_bytes = std::fs::read("shaders/triangle.frag.spv").unwrap();
-    // !Note: This might bite me later due to endianess.
-    let (_, fragment_shader_binary, _) =
-        unsafe { fragment_shader_binary_as_bytes.align_to::<u32>() };
-
-    let fragment_shader_module_create_info = vk::ShaderModuleCreateInfo::builder()
-        .code(fragment_shader_binary)
-        .build();
-    let fragment_shader_module = unsafe {
-        device
-            .create_shader_module(&fragment_shader_module_create_info, None)
-            .unwrap()
-    };
-
-    return (vertex_shader_module, fragment_shader_module);
+    return shader_module;
 }
 
 pub fn pipeline_shader_stage_create_info(

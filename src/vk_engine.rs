@@ -8,6 +8,7 @@ use crate::vk_initializers;
 use ash::extensions::{
     ext::DebugUtils,
     khr::{Surface, Swapchain},
+    nv::MeshShader,
 };
 use ash::version::{DeviceV1_0, InstanceV1_0};
 use ash::{vk, vk::PhysicalDevice, Device, Instance};
@@ -28,8 +29,17 @@ struct VkImage {
 }
 
 struct Vertex {
-    pos: Vec3,
-    norm: Vec3,
+    pos: Vec4,
+    norm: Vec4,
+}
+
+#[derive(Debug, Clone, Copy)]
+// #[repr(align(16))]
+struct Meshlet {
+    vertices: [u32; 64],
+    indices: [u16; 126],
+    vertex_and_index_count: u16,
+    padding: u16,
 }
 
 struct Mesh {
@@ -37,6 +47,13 @@ struct Mesh {
     vertex_buffer: VkBuffer,
     indices: Vec<u32>,
     index_buffer: VkBuffer,
+}
+
+struct MeshShaderData {
+    descriptor_set_layout: vk::DescriptorSetLayout,
+    descriptor_set: vk::DescriptorSet,
+    buffers: [VkBuffer; 2],
+    meshlet_count: u32,
 }
 
 struct Material {
@@ -60,7 +77,7 @@ struct SceneData {
     sun_light_col: Vec4,
 }
 
-const FRAME_OVERLAP: usize = 2;
+const FRAME_OVERLAP: usize = 1;
 const MAX_OBJECTS: usize = 10_000;
 
 struct FrameData {
@@ -108,8 +125,8 @@ impl Vertex {
         let mut result = Vec::<Vertex>::with_capacity(positions.len());
         for (i, _) in positions.iter().enumerate() {
             result.push(Vertex {
-                pos: positions[i],
-                norm: normals[i],
+                pos: Vec4::from_vec3(positions[i], 1.0),
+                norm: Vec4::from_vec3(normals[i], 1.0),
             });
         }
         return result;
@@ -182,12 +199,13 @@ impl VkPipelineBuilder {
 
         let pipeline_create_info = vk::GraphicsPipelineCreateInfo::builder()
             .stages(self.shader_stages.as_slice())
-            .vertex_input_state(
-                &vk::PipelineVertexInputStateCreateInfo::builder()
-                    .vertex_binding_descriptions(&[Vertex::get_binding_description()])
-                    .vertex_attribute_descriptions(&Vertex::get_attribute_description())
-                    .build(),
-            )
+            // .vertex_input_state(
+            //     &vk::PipelineVertexInputStateCreateInfo::builder()
+            //         .vertex_binding_descriptions(&[Vertex::get_binding_description()])
+            //         .vertex_attribute_descriptions(&Vertex::get_attribute_description())
+            //         .build(),
+            // )
+            .vertex_input_state(&self.vertex_input_info)
             .input_assembly_state(&self.input_assembly)
             .viewport_state(&viewport_state_create_info)
             .rasterization_state(&self.rasterizer)
@@ -240,6 +258,8 @@ pub struct VkEngine {
     renderables: Vec<RenderObject>,
     camera: Camera,
     last_timestamp: std::time::Instant,
+    mesh_shader_data: MeshShaderData,
+    mesh_shader: MeshShader,
 }
 
 impl VkEngine {
@@ -343,7 +363,7 @@ impl VkEngine {
             vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
             0,
             1,
-            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+            vk::ShaderStageFlags::MESH_NV | vk::ShaderStageFlags::FRAGMENT,
         );
 
         let global_set_info = vk::DescriptorSetLayoutCreateInfo::builder()
@@ -449,40 +469,6 @@ impl VkEngine {
             let (command_pool, command_buffers) =
                 vk_initializers::create_command_pool_and_buffer(queue_family_index, &device);
 
-            let (object_buffer, object_buffer_memory) = vk_initializers::create_buffer(
-                &instance,
-                physical_device,
-                &device,
-                (size_of::<Mat4>() * MAX_OBJECTS) as u64,
-                vk::BufferUsageFlags::STORAGE_BUFFER,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            );
-
-            let object_descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
-                .descriptor_pool(descriptor_pool)
-                .set_layouts(&[object_set_layout])
-                .build();
-            let object_descriptor_set = unsafe {
-                device
-                    .allocate_descriptor_sets(&object_descriptor_set_allocate_info)
-                    .unwrap()[0]
-            };
-
-            let object_buffer_info = vk::DescriptorBufferInfo::builder()
-                .buffer(object_buffer)
-                .offset(0)
-                .range((size_of::<Mat4>() * MAX_OBJECTS) as u64)
-                .build();
-
-            let object_set_write = vk::WriteDescriptorSet::builder()
-                .dst_binding(0)
-                .dst_set(object_descriptor_set)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(&[object_buffer_info])
-                .build();
-
-            unsafe { device.update_descriptor_sets(&[object_set_write], &[]) };
-
             frame_data[i] = FrameData {
                 present_semaphore,
                 render_semaphore,
@@ -490,35 +476,146 @@ impl VkEngine {
                 command_pool,
                 command_buffer: command_buffers[0],
                 object_buffer: VkBuffer {
-                    buffer: object_buffer,
-                    buffer_memory: object_buffer_memory,
+                    buffer: unsafe { std::mem::zeroed() },
+                    buffer_memory: unsafe { std::mem::zeroed() },
                 },
-                object_descriptor: object_descriptor_set,
+                object_descriptor: unsafe { std::mem::zeroed() },
             };
         }
+
+        let (positions, normals, indices) = read_obj_file("./assets/models/monkey.obj");
+        let vertices = Vertex::construct_vertices_from_positions(positions, normals);
+        let meshlets = Self::build_meshlets(indices, vertices.len());
+
+        let meshlet_buffer_binding = vk_initializers::descriptor_set_layout_binding(
+            vk::DescriptorType::STORAGE_BUFFER,
+            0,
+            1,
+            vk::ShaderStageFlags::MESH_NV,
+        );
+        let vertex_buffer_binding = vk_initializers::descriptor_set_layout_binding(
+            vk::DescriptorType::STORAGE_BUFFER,
+            1,
+            1,
+            vk::ShaderStageFlags::MESH_NV,
+        );
+
+        let meshlet_and_vertex_descriptor_layout_info =
+            vk::DescriptorSetLayoutCreateInfo::builder()
+                .bindings(&[meshlet_buffer_binding, vertex_buffer_binding])
+                .build();
+        let meshlet_and_vertex_descriptor_layout = unsafe {
+            device
+                .create_descriptor_set_layout(&meshlet_and_vertex_descriptor_layout_info, None)
+                .unwrap()
+        };
+
+        let meshlet_and_vertex_descriptor_allocate_info = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&[meshlet_and_vertex_descriptor_layout])
+            .build();
+        let meshlet_and_vertex_descriptor_set = unsafe {
+            device
+                .allocate_descriptor_sets(&meshlet_and_vertex_descriptor_allocate_info)
+                .unwrap()[0]
+        };
+
+        let meshlet_buffer_size = (size_of::<Meshlet>() * meshlets.len()) as u64;
+        let (meshlet_buffer, meshlet_buffer_memory) = vk_initializers::create_buffer(
+            &instance,
+            physical_device,
+            &device,
+            meshlet_buffer_size,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        );
+
+        unsafe {
+            let data_ptr = device
+                .map_memory(
+                    meshlet_buffer_memory,
+                    0,
+                    meshlet_buffer_size,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .unwrap() as *mut Meshlet;
+            data_ptr.copy_from_nonoverlapping(meshlets.as_ptr(), meshlets.len());
+            device.unmap_memory(meshlet_buffer_memory);
+        }
+
+        let meshlet_buffer_info = vk::DescriptorBufferInfo::builder()
+            .buffer(meshlet_buffer)
+            .offset(0)
+            .range(meshlet_buffer_size)
+            .build();
+        let meshlet_set_write = vk::WriteDescriptorSet::builder()
+            .dst_set(meshlet_and_vertex_descriptor_set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(&[meshlet_buffer_info])
+            .build();
+
+        let vertex_buffer_size = (size_of::<Vertex>() * vertices.len()) as u64;
+        let (vertex_buffer, vertex_buffer_memory) = vk_initializers::create_buffer(
+            &instance,
+            physical_device,
+            &device,
+            vertex_buffer_size,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        );
+
+        unsafe {
+            let data_ptr = device
+                .map_memory(
+                    vertex_buffer_memory,
+                    0,
+                    vertex_buffer_size,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .unwrap() as *mut Vertex;
+            data_ptr.copy_from_nonoverlapping(vertices.as_ptr(), vertices.len());
+            device.unmap_memory(vertex_buffer_memory);
+        }
+
+        let vertex_buffer_info = vk::DescriptorBufferInfo::builder()
+            .buffer(vertex_buffer)
+            .offset(0)
+            .range(vertex_buffer_size)
+            .build();
+        let vertex_set_write = vk::WriteDescriptorSet::builder()
+            .dst_set(meshlet_and_vertex_descriptor_set)
+            .dst_binding(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(&[vertex_buffer_info])
+            .build();
+
+        unsafe { device.update_descriptor_sets(&[meshlet_set_write, vertex_set_write], &[]) };
 
         let triangle_pipeline_layout = unsafe {
             device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::builder()
-                        .set_layouts(&[global_set_layout, object_set_layout])
+                        .set_layouts(&[global_set_layout, meshlet_and_vertex_descriptor_layout])
                         .build(),
                     None,
                 )
                 .unwrap()
         };
 
-        let (triangle_vertex_shader_module, triangle_fragment_shader_module) =
-            vk_initializers::create_vertex_and_fragment_shader_modules(&device);
+        let triangle_mesh_shader_module =
+            vk_initializers::create_shader_module(&device, "./shaders/triangle.mesh.spv");
+        let triangle_fragment_shader_module =
+            vk_initializers::create_shader_module(&device, "./shaders/triangle.frag.spv");
 
         let mut pipeline_builder = VkPipelineBuilder::default();
 
         pipeline_builder
             .shader_stages
             .push(vk_initializers::pipeline_shader_stage_create_info(
-                vk::ShaderStageFlags::VERTEX,
-                triangle_vertex_shader_module,
-                "vs_main\0",
+                vk::ShaderStageFlags::MESH_NV,
+                triangle_mesh_shader_module,
+                "ms_main\0",
             ));
         pipeline_builder
             .shader_stages
@@ -621,6 +718,8 @@ impl VkEngine {
             }
         }
 
+        let mesh_shader = MeshShader::new(&instance, &device);
+
         return VkEngine {
             sdl_context,
             window,
@@ -650,13 +749,29 @@ impl VkEngine {
                 buffer: scene_param_buffer,
                 buffer_memory: scene_param_buffer_memory,
             },
-            triangle_vertex_shader_module,
+            triangle_vertex_shader_module: triangle_mesh_shader_module, // ToDo
             triangle_fragment_shader_module,
             meshes: mesh_map,
             materials: material_map,
             renderables: scene,
             camera,
             last_timestamp: std::time::Instant::now(),
+            mesh_shader_data: MeshShaderData {
+                descriptor_set_layout: meshlet_and_vertex_descriptor_layout,
+                descriptor_set: meshlet_and_vertex_descriptor_set,
+                buffers: [
+                    VkBuffer {
+                        buffer: meshlet_buffer,
+                        buffer_memory: meshlet_buffer_memory,
+                    },
+                    VkBuffer {
+                        buffer: vertex_buffer,
+                        buffer_memory: vertex_buffer_memory,
+                    },
+                ],
+                meshlet_count: meshlets.len() as u32,
+            },
+            mesh_shader,
         };
     }
 
@@ -742,6 +857,71 @@ impl VkEngine {
         };
     }
 
+    fn build_meshlets(indices: Vec<u32>, vertex_count: usize) -> Vec<Meshlet> {
+        let mut meshlet_vertices = vec![0xFF; vertex_count];
+        let mut meshlets = Vec::<Meshlet>::new();
+        let mut meshlet_vertex_count = 0;
+        let mut meshlet_index_count = 0;
+        let mut meshlet: Meshlet = unsafe { std::mem::zeroed() };
+        let mut i = 0;
+        while i < indices.len() {
+            let (a, b, c) = (indices[i], indices[i + 1], indices[i + 2]);
+
+            let (av, bv, cv) = (
+                meshlet_vertices[a as usize],
+                meshlet_vertices[b as usize],
+                meshlet_vertices[c as usize],
+            );
+
+            let unused_av = if av == 0xFF { 1 } else { 0 };
+            let unused_bv = if bv == 0xFF { 1 } else { 0 };
+            let unused_cv = if cv == 0xFF { 1 } else { 0 };
+
+            if (meshlet_vertex_count + unused_av + unused_bv + unused_cv > 64)
+                || (meshlet_index_count + 3 > 126)
+            {
+                meshlet.vertex_and_index_count = meshlet_vertex_count | (meshlet_index_count << 8);
+                meshlets.push(meshlet);
+                meshlet = unsafe { std::mem::zeroed() };
+                meshlet_vertex_count = 0;
+                meshlet_index_count = 0;
+                meshlet_vertices = vec![0xFF; vertex_count];
+            }
+
+            if av == 0xFF {
+                meshlet_vertices[a as usize] = meshlet_vertex_count;
+                meshlet.vertices[meshlet_vertex_count as usize] = a;
+                meshlet_vertex_count += 1;
+            }
+
+            if bv == 0xFF {
+                meshlet_vertices[b as usize] = meshlet_vertex_count;
+                meshlet.vertices[meshlet_vertex_count as usize] = b;
+                meshlet_vertex_count += 1;
+            }
+
+            if cv == 0xFF {
+                meshlet_vertices[c as usize] = meshlet_vertex_count;
+                meshlet.vertices[meshlet_vertex_count as usize] = c;
+                meshlet_vertex_count += 1;
+            }
+
+            meshlet.indices[meshlet_index_count as usize + 0] = meshlet_vertices[a as usize] as u16;
+            meshlet.indices[meshlet_index_count as usize + 1] = meshlet_vertices[b as usize] as u16;
+            meshlet.indices[meshlet_index_count as usize + 2] = meshlet_vertices[c as usize] as u16;
+            meshlet_index_count += 3;
+
+            i += 3;
+        }
+
+        if meshlet_index_count > 0 {
+            meshlet.vertex_and_index_count = meshlet_vertex_count | (meshlet_index_count << 8);
+            meshlets.push(meshlet);
+        }
+
+        return meshlets;
+    }
+
     pub unsafe fn cleanup(&mut self) {
         self.device.device_wait_idle().unwrap();
 
@@ -753,6 +933,8 @@ impl VkEngine {
         self.device
             .destroy_descriptor_set_layout(self.global_set_layout, None);
         self.device
+            .destroy_descriptor_set_layout(self.mesh_shader_data.descriptor_set_layout, None);
+        self.device
             .destroy_descriptor_set_layout(self.object_set_layout, None);
         self.device
             .destroy_descriptor_pool(self.descriptor_pool, None);
@@ -761,6 +943,11 @@ impl VkEngine {
             .destroy_buffer(self.scene_data_buffer.buffer, None);
         self.device
             .free_memory(self.scene_data_buffer.buffer_memory, None);
+
+        for buffer in self.mesh_shader_data.buffers.iter() {
+            self.device.destroy_buffer(buffer.buffer, None);
+            self.device.free_memory(buffer.buffer_memory, None);
+        }
 
         for frame_data in self.frame_data.iter() {
             self.device
@@ -907,7 +1094,6 @@ impl VkEngine {
         let scene_data_offset =
             (Self::return_aligned_size(self.physical_device_properties, size_of::<SceneData>())
                 * frame_index) as u64;
-
         let scene_data_ptr = self
             .device
             .map_memory(
@@ -921,27 +1107,33 @@ impl VkEngine {
         self.device
             .unmap_memory(self.scene_data_buffer.buffer_memory);
 
-        let object_data_ptr = self
-            .device
-            .map_memory(
-                self.frame_data[frame_index].object_buffer.buffer_memory,
-                0,
-                (self.renderables.len() * size_of::<Mat4>()) as u64,
-                vk::MemoryMapFlags::empty(),
-            )
-            .unwrap() as *mut Mat4;
-        let object_matrices = self
-            .renderables
-            .iter()
-            .map(|renderable| -> Mat4 {
-                return renderable.transformation_matrix;
-            })
-            .collect::<Vec<Mat4>>();
-        object_data_ptr.copy_from_nonoverlapping(object_matrices.as_ptr(), object_matrices.len());
-        self.device
-            .unmap_memory(self.frame_data[frame_index].object_buffer.buffer_memory);
+        self.device.cmd_bind_pipeline(
+            frame_data.command_buffer,
+            vk::PipelineBindPoint::GRAPHICS,
+            self.materials["default"].pipeline,
+        );
 
-        self.draw_objects();
+        let scene_data_offset = Self::return_aligned_size(
+            self.physical_device_properties,
+            size_of::<SceneData>() * frame_index,
+        ) as u32;
+        self.device.cmd_bind_descriptor_sets(
+            frame_data.command_buffer,
+            vk::PipelineBindPoint::GRAPHICS,
+            self.materials["default"].pipeline_layout,
+            0,
+            &[
+                self.global_descriptor_set,
+                self.mesh_shader_data.descriptor_set,
+            ],
+            &[scene_data_offset],
+        );
+
+        self.mesh_shader.cmd_draw_mesh_tasks(
+            frame_data.command_buffer,
+            self.mesh_shader_data.meshlet_count,
+            0,
+        );
 
         self.device.cmd_end_render_pass(frame_data.command_buffer);
         self.device

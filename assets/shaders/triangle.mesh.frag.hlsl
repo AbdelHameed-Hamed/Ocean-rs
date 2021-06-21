@@ -1,4 +1,4 @@
-cbuffer SceneData: register(b0) {
+cbuffer SceneData: register(b0, space0) {
     column_major float4x4 view;
     column_major float4x4 projection;
     float4 fog_color; // w is for exponent
@@ -9,14 +9,15 @@ cbuffer SceneData: register(b0) {
 };
 
 struct Vertex {
-    float3 pos;
-    float3 norm;
+    float4 pos;
+    float4 norm;
 };
 
 struct Meshlet {
     uint32_t vertices[64];
     uint16_t indices[126];
     uint16_t vertex_and_index_count;
+    uint16_t padding;
 };
 
 StructuredBuffer<Meshlet> meshlets: register(t0, space1);
@@ -48,13 +49,14 @@ void ms_main(
             uint32_t vertex_idx = meshlet.vertices[idx];
             Vertex vertex = vertices[vertex_idx];
 
-            out_verts[idx].pos = mul(mul(projection, view), float4(vertex.pos, 1.0f));
-            out_verts[idx].col = float4(vertex.norm, 1.0f);
+            out_verts[idx].pos = mul(mul(projection, view), vertex.pos);
+            out_verts[idx].col = vertex.norm;
         }
 
         idx = (group_thread_id * 3) + (offset * 32);
-        if (idx < primitive_count) {
-            out_primitives[group_thread_id] = uint32_t3(
+        if (idx + 2 < primitive_count) {
+            uint32_t primitive_idx = group_thread_id + (offset * 32);
+            out_primitives[primitive_idx] = uint32_t3(
                 meshlet.indices[idx + 0],
                 meshlet.indices[idx + 1],
                 meshlet.indices[idx + 2]
