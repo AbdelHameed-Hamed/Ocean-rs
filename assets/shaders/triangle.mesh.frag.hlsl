@@ -53,13 +53,11 @@ void ms_main(
             out_verts[idx].col = vertex.norm;
         }
 
-        idx = (group_thread_id * 3) + (offset * 32);
-        if (idx + 2 < primitive_count) {
-            uint32_t primitive_idx = group_thread_id + (offset * 32);
-            out_primitives[primitive_idx] = uint32_t3(
-                meshlet.indices[idx + 0],
-                meshlet.indices[idx + 1],
-                meshlet.indices[idx + 2]
+        if (idx < primitive_count) {
+            out_primitives[idx] = uint32_t3(
+                meshlet.indices[(idx * 3) + 0],
+                meshlet.indices[(idx * 3) + 1],
+                meshlet.indices[(idx * 3) + 2]
             );
         }
     }
