@@ -888,6 +888,12 @@ impl VkEngine {
                 meshlet_vertices = vec![0xFF; vertex_count];
             }
 
+            let (av, bv, cv) = (
+                meshlet_vertices[a as usize],
+                meshlet_vertices[b as usize],
+                meshlet_vertices[c as usize],
+            );
+
             if av == 0xFF {
                 meshlet_vertices[a as usize] = meshlet_vertex_count;
                 meshlet.vertices[meshlet_vertex_count as usize] = a;

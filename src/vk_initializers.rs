@@ -9,8 +9,8 @@ use ash::extensions::{
 use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0};
 use ash::{vk, vk::Handle, Device, Entry, Instance};
 use sdl2::video::Window;
+use std::borrow::Cow;
 use std::ffi::{CStr, CString};
-use std::{borrow::Cow, ffi::c_void};
 
 pub fn create_sdl_window(width: u32, height: u32) -> (sdl2::Sdl, sdl2::video::Window) {
     let sdl_context = sdl2::init().unwrap();
@@ -28,7 +28,8 @@ pub fn create_sdl_window(width: u32, height: u32) -> (sdl2::Sdl, sdl2::video::Wi
 pub fn create_instance(window: &Window) -> (Entry, Instance) {
     let application_name = CString::new("Rust Vulkan Renderer").unwrap();
 
-    let instance_extensions = window.vulkan_instance_extensions().unwrap();
+    let mut instance_extensions = window.vulkan_instance_extensions().unwrap();
+    instance_extensions.push("VK_EXT_debug_utils");
     let mut extension_names_raw = instance_extensions
         .iter()
         .map(|ext| ext.as_ptr() as *const i8)
@@ -178,7 +179,7 @@ pub fn create_device(
         Swapchain::name().as_ptr(),
         MeshShader::name().as_ptr(),
         DeviceDiagnosticCheckpoints::name().as_ptr(),
-        "VK_KHR_16bit_storage".as_ptr() as *const i8,
+        vk::KhrShaderNonSemanticInfoFn::name().as_ptr(),
     ];
 
     let priorities = [1.0];
