@@ -9,15 +9,14 @@ cbuffer SceneData: register(b0, space0) {
 };
 
 struct Vertex {
-    float4 pos;
-    float4 norm;
+    float3 pos;
+    float3 norm;
 };
 
 struct Meshlet {
     uint32_t vertices[64];
     uint16_t indices[126];
     uint16_t vertex_and_index_count;
-    uint16_t padding;
 };
 
 StructuredBuffer<Meshlet> meshlets: register(t0, space1);
@@ -49,8 +48,8 @@ void ms_main(
             uint32_t vertex_idx = meshlet.vertices[idx];
             Vertex vertex = vertices[vertex_idx];
 
-            out_verts[idx].pos = mul(mul(projection, view), vertex.pos);
-            out_verts[idx].col = vertex.norm;
+            out_verts[idx].pos = mul(mul(projection, view), float4(vertex.pos, 1.0));
+            out_verts[idx].col = float4(vertex.norm, 1.0);
         }
 
         if (idx < primitive_count) {

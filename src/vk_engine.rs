@@ -28,18 +28,18 @@ struct VkImage {
     image_memory: vk::DeviceMemory,
 }
 
+#[repr(align(16))]
 struct Vertex {
     pos: Vec4,
     norm: Vec4,
 }
 
 #[derive(Debug, Clone, Copy)]
-// #[repr(align(16))]
+#[repr(align(16))]
 struct Meshlet {
     vertices: [u32; 64],
     indices: [u16; 126],
     vertex_and_index_count: u16,
-    padding: u16,
 }
 
 struct Mesh {
