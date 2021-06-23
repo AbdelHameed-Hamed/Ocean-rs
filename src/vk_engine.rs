@@ -30,8 +30,8 @@ struct VkImage {
 
 #[repr(align(16))]
 struct Vertex {
-    pos: Vec4,
-    norm: Vec4,
+    pos: Vec3,
+    norm: Vec3,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -77,7 +77,7 @@ struct SceneData {
     sun_light_col: Vec4,
 }
 
-const FRAME_OVERLAP: usize = 1;
+const FRAME_OVERLAP: usize = 2;
 const MAX_OBJECTS: usize = 10_000;
 
 struct FrameData {
@@ -91,31 +91,6 @@ struct FrameData {
 }
 
 impl Vertex {
-    pub fn get_binding_description() -> vk::VertexInputBindingDescription {
-        return vk::VertexInputBindingDescription::builder()
-            .binding(0)
-            .stride(size_of::<Vertex>() as u32)
-            .input_rate(vk::VertexInputRate::VERTEX)
-            .build();
-    }
-
-    pub fn get_attribute_description() -> [vk::VertexInputAttributeDescription; 2] {
-        return [
-            vk::VertexInputAttributeDescription::builder()
-                .binding(0)
-                .location(0)
-                .format(vk::Format::R32G32B32_SFLOAT)
-                .offset(0)
-                .build(),
-            vk::VertexInputAttributeDescription::builder()
-                .binding(0)
-                .location(1)
-                .format(vk::Format::R32G32B32_SFLOAT)
-                .offset(size_of::<Vec3>() as u32)
-                .build(),
-        ];
-    }
-
     pub fn construct_vertices_from_positions(
         positions: Vec<Vec3>,
         normals: Vec<Vec3>,
@@ -125,8 +100,8 @@ impl Vertex {
         let mut result = Vec::<Vertex>::with_capacity(positions.len());
         for (i, _) in positions.iter().enumerate() {
             result.push(Vertex {
-                pos: Vec4::from_vec3(positions[i], 1.0),
-                norm: Vec4::from_vec3(normals[i], 1.0),
+                pos: positions[i],
+                norm: normals[i],
             });
         }
         return result;
@@ -199,12 +174,6 @@ impl VkPipelineBuilder {
 
         let pipeline_create_info = vk::GraphicsPipelineCreateInfo::builder()
             .stages(self.shader_stages.as_slice())
-            // .vertex_input_state(
-            //     &vk::PipelineVertexInputStateCreateInfo::builder()
-            //         .vertex_binding_descriptions(&[Vertex::get_binding_description()])
-            //         .vertex_attribute_descriptions(&Vertex::get_attribute_description())
-            //         .build(),
-            // )
             .vertex_input_state(&self.vertex_input_info)
             .input_assembly_state(&self.input_assembly)
             .viewport_state(&viewport_state_create_info)
@@ -253,9 +222,7 @@ pub struct VkEngine {
     scene_data_buffer: VkBuffer,
     triangle_vertex_shader_module: vk::ShaderModule,
     triangle_fragment_shader_module: vk::ShaderModule,
-    meshes: HashMap<String, Mesh>,
     materials: HashMap<String, Material>,
-    renderables: Vec<RenderObject>,
     camera: Camera,
     last_timestamp: std::time::Instant,
     mesh_shader_data: MeshShaderData,
@@ -657,25 +624,7 @@ impl VkEngine {
 
         let triangle_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
 
-        let monkey_mesh = Self::load_and_upload_mesh(
-            &instance,
-            physical_device,
-            &device,
-            "./assets/models/monkey.obj",
-        );
-
-        let triangle_mesh = Self::load_and_upload_mesh(
-            &instance,
-            physical_device,
-            &device,
-            "./assets/models/triangle.obj",
-        );
-
         let camera = Camera::default();
-
-        let mut mesh_map = HashMap::<String, Mesh>::new();
-        mesh_map.insert("monkey".to_string(), monkey_mesh);
-        mesh_map.insert("triangle".to_string(), triangle_mesh);
 
         let mut material_map = HashMap::<String, Material>::new();
         material_map.insert(
@@ -685,38 +634,6 @@ impl VkEngine {
                 pipeline_layout: triangle_pipeline_layout,
             },
         );
-
-        let mut scene = Vec::<RenderObject>::with_capacity(401);
-        scene.push(RenderObject {
-            mesh_key: "monkey".to_string(),
-            material_key: "default".to_string(),
-            transformation_matrix: Mat4::scale(Vec3 {
-                x: 1.0,
-                y: -1.0,
-                z: 1.0,
-            }),
-        });
-
-        for x in -20..=20 {
-            for y in -20..=20 {
-                let translation = Mat4::translate(Vec3 {
-                    x: x as f32,
-                    y: 0.0,
-                    z: y as f32,
-                });
-                let scale = Mat4::scale(Vec3 {
-                    x: 0.2,
-                    y: 0.2,
-                    z: 0.2,
-                });
-
-                scene.push(RenderObject {
-                    mesh_key: "triangle".to_string(),
-                    material_key: "default".to_string(),
-                    transformation_matrix: translation * scale,
-                });
-            }
-        }
 
         let mesh_shader = MeshShader::new(&instance, &device);
 
@@ -751,9 +668,7 @@ impl VkEngine {
             },
             triangle_vertex_shader_module: triangle_mesh_shader_module, // ToDo
             triangle_fragment_shader_module,
-            meshes: mesh_map,
             materials: material_map,
-            renderables: scene,
             camera,
             last_timestamp: std::time::Instant::now(),
             mesh_shader_data: MeshShaderData {
@@ -789,72 +704,6 @@ impl VkEngine {
         };
 
         return aligned_size;
-    }
-
-    fn load_and_upload_mesh(
-        instance: &Instance,
-        physical_device: PhysicalDevice,
-        device: &Device,
-        path: &str,
-    ) -> Mesh {
-        let (positions, normals, indices) = read_obj_file(path);
-        let vertices = Vertex::construct_vertices_from_positions(positions, normals);
-
-        let vertex_buffer_size = (size_of::<Vertex>() * vertices.len()) as u64;
-        let index_buffer_size = (size_of::<u32>() * indices.len()) as u64;
-
-        let (vertex_buffer, vertex_buffer_memory) = vk_initializers::create_buffer(
-            &instance,
-            physical_device,
-            &device,
-            vertex_buffer_size,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        );
-        let (index_buffer, index_buffer_memory) = vk_initializers::create_buffer(
-            &instance,
-            physical_device,
-            &device,
-            index_buffer_size,
-            vk::BufferUsageFlags::INDEX_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        );
-
-        unsafe {
-            // Persistant mapping.
-            let vertex_data_ptr = device
-                .map_memory(
-                    vertex_buffer_memory,
-                    0,
-                    vertex_buffer_size,
-                    vk::MemoryMapFlags::empty(),
-                )
-                .unwrap() as *mut Vertex;
-            let index_data_ptr = device
-                .map_memory(
-                    index_buffer_memory,
-                    0,
-                    index_buffer_size,
-                    vk::MemoryMapFlags::empty(),
-                )
-                .unwrap() as *mut u32;
-
-            vertex_data_ptr.copy_from_nonoverlapping(vertices.as_ptr(), vertices.len());
-            index_data_ptr.copy_from_nonoverlapping(indices.as_ptr(), indices.len());
-        };
-
-        return Mesh {
-            vertices,
-            indices,
-            vertex_buffer: VkBuffer {
-                buffer: vertex_buffer,
-                buffer_memory: vertex_buffer_memory,
-            },
-            index_buffer: VkBuffer {
-                buffer: index_buffer,
-                buffer_memory: index_buffer_memory,
-            },
-        };
     }
 
     fn build_meshlets(indices: Vec<u32>, vertex_count: usize) -> Vec<Meshlet> {
@@ -945,14 +794,18 @@ impl VkEngine {
         self.device
             .destroy_descriptor_pool(self.descriptor_pool, None);
 
-        self.device
-            .destroy_buffer(self.scene_data_buffer.buffer, None);
-        self.device
-            .free_memory(self.scene_data_buffer.buffer_memory, None);
+        vk_initializers::free_buffer_and_memory(
+            &self.device,
+            self.scene_data_buffer.buffer,
+            self.scene_data_buffer.buffer_memory,
+        );
 
         for buffer in self.mesh_shader_data.buffers.iter() {
-            self.device.destroy_buffer(buffer.buffer, None);
-            self.device.free_memory(buffer.buffer_memory, None);
+            vk_initializers::free_buffer_and_memory(
+                &self.device,
+                buffer.buffer,
+                buffer.buffer_memory,
+            );
         }
 
         for frame_data in self.frame_data.iter() {
@@ -965,10 +818,11 @@ impl VkEngine {
             self.device
                 .destroy_command_pool(frame_data.command_pool, None);
 
-            self.device
-                .destroy_buffer(frame_data.object_buffer.buffer, None);
-            self.device
-                .free_memory(frame_data.object_buffer.buffer_memory, None);
+            vk_initializers::free_buffer_and_memory(
+                &self.device,
+                frame_data.object_buffer.buffer,
+                frame_data.object_buffer.buffer_memory,
+            );
         }
         for &framebuffer in self.framebuffers.iter() {
             self.device.destroy_framebuffer(framebuffer, None);
@@ -991,16 +845,6 @@ impl VkEngine {
 
         self.swapchain_loader
             .destroy_swapchain(self.swapchain, None);
-
-        for (_, mesh) in self.meshes.iter() {
-            self.device.destroy_buffer(mesh.vertex_buffer.buffer, None);
-            self.device.destroy_buffer(mesh.index_buffer.buffer, None);
-
-            self.device
-                .free_memory(mesh.vertex_buffer.buffer_memory, None);
-            self.device
-                .free_memory(mesh.index_buffer.buffer_memory, None);
-        }
 
         self.device.destroy_device(None);
         self.surface_loader.destroy_surface(self.surface, None);
@@ -1166,78 +1010,6 @@ impl VkEngine {
             .unwrap();
 
         self.frame_count += 1;
-    }
-
-    unsafe fn draw_objects(&self) {
-        let frame_index = self.frame_count as usize % FRAME_OVERLAP;
-        let frame_data = &self.frame_data[frame_index];
-
-        let (mut last_mesh_key, mut last_material_key) = ("".to_string(), "".to_string());
-        for (
-            i,
-            RenderObject {
-                mesh_key,
-                material_key,
-                ..
-            },
-        ) in self.renderables.iter().enumerate()
-        {
-            if *material_key != last_material_key {
-                self.device.cmd_bind_pipeline(
-                    frame_data.command_buffer,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    self.materials[material_key].pipeline,
-                );
-                last_material_key = material_key.clone();
-
-                let scene_data_offset = Self::return_aligned_size(
-                    self.physical_device_properties,
-                    size_of::<SceneData>() * frame_index,
-                ) as u32;
-                self.device.cmd_bind_descriptor_sets(
-                    frame_data.command_buffer,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    self.materials[material_key].pipeline_layout,
-                    0,
-                    &[self.global_descriptor_set],
-                    &[scene_data_offset],
-                );
-
-                self.device.cmd_bind_descriptor_sets(
-                    frame_data.command_buffer,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    self.materials[material_key].pipeline_layout,
-                    1,
-                    &[frame_data.object_descriptor],
-                    &[],
-                );
-            }
-
-            if *mesh_key != last_mesh_key {
-                self.device.cmd_bind_vertex_buffers(
-                    frame_data.command_buffer,
-                    0,
-                    &[self.meshes[mesh_key].vertex_buffer.buffer],
-                    &[0],
-                );
-                self.device.cmd_bind_index_buffer(
-                    frame_data.command_buffer,
-                    self.meshes[mesh_key].index_buffer.buffer,
-                    0,
-                    vk::IndexType::UINT32,
-                );
-                last_mesh_key = mesh_key.clone();
-            }
-
-            self.device.cmd_draw_indexed(
-                frame_data.command_buffer,
-                self.meshes[mesh_key].indices.len() as u32,
-                1,
-                0,
-                0,
-                i as u32,
-            );
-        }
     }
 
     pub fn run(&mut self) {

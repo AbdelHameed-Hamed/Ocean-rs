@@ -601,6 +601,15 @@ pub fn copy_buffer(
     };
 }
 
+pub unsafe fn free_buffer_and_memory(
+    device: &Device,
+    buffer: vk::Buffer,
+    buffer_memory: vk::DeviceMemory,
+) {
+    device.destroy_buffer(buffer, None);
+    device.free_memory(buffer_memory, None);
+}
+
 pub fn create_image_create_info(
     format: vk::Format,
     usage: vk::ImageUsageFlags,
