@@ -38,7 +38,7 @@ struct Vertex {
 #[repr(align(16))]
 struct Meshlet {
     vertices: [u32; 64],
-    indices: [u16; 126],
+    primitives: [u32; 42],
     vertex_and_index_count: u16,
 }
 
@@ -710,7 +710,7 @@ impl VkEngine {
         let mut meshlet_vertices = vec![0xFF; vertex_count];
         let mut meshlets = Vec::<Meshlet>::new();
         let mut meshlet_vertex_count = 0;
-        let mut meshlet_index_count = 0;
+        let mut meshlet_primitive_count = 0;
         let mut meshlet: Meshlet = unsafe { std::mem::zeroed() };
         let mut i = 0;
         while i < indices.len() {
@@ -727,13 +727,14 @@ impl VkEngine {
             let unused_cv = if cv == 0xFF { 1 } else { 0 };
 
             if (meshlet_vertex_count + unused_av + unused_bv + unused_cv > 64)
-                || (meshlet_index_count + 3 > 126)
+                || (meshlet_primitive_count + 1 > 42)
             {
-                meshlet.vertex_and_index_count = meshlet_vertex_count | (meshlet_index_count << 8);
+                meshlet.vertex_and_index_count =
+                    meshlet_vertex_count | (meshlet_primitive_count << 8);
                 meshlets.push(meshlet);
                 meshlet = unsafe { std::mem::zeroed() };
                 meshlet_vertex_count = 0;
-                meshlet_index_count = 0;
+                meshlet_primitive_count = 0;
                 meshlet_vertices = vec![0xFF; vertex_count];
             }
 
@@ -761,16 +762,17 @@ impl VkEngine {
                 meshlet_vertex_count += 1;
             }
 
-            meshlet.indices[meshlet_index_count as usize + 0] = meshlet_vertices[a as usize] as u16;
-            meshlet.indices[meshlet_index_count as usize + 1] = meshlet_vertices[b as usize] as u16;
-            meshlet.indices[meshlet_index_count as usize + 2] = meshlet_vertices[c as usize] as u16;
-            meshlet_index_count += 3;
+            meshlet.primitives[meshlet_primitive_count as usize] =
+                ((meshlet_vertices[a as usize] as u32) & 0xFF)
+                    | ((meshlet_vertices[b as usize] as u32) << 8) & 0xFF_00
+                    | ((meshlet_vertices[c as usize] as u32) << 16) & 0xFF_00_00;
+            meshlet_primitive_count += 1;
 
             i += 3;
         }
 
-        if meshlet_index_count > 0 {
-            meshlet.vertex_and_index_count = meshlet_vertex_count | (meshlet_index_count << 8);
+        if meshlet_primitive_count > 0 {
+            meshlet.vertex_and_index_count = meshlet_vertex_count | (meshlet_primitive_count << 8);
             meshlets.push(meshlet);
         }
 

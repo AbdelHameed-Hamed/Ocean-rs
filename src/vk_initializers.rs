@@ -202,6 +202,7 @@ pub fn create_device(
             vk::PhysicalDeviceFeatures::builder()
                 .shader_clip_distance(true)
                 .shader_int16(true)
+                .fill_mode_non_solid(true)
                 .build(),
         )
         .build();

@@ -15,7 +15,7 @@ struct Vertex {
 
 struct Meshlet {
     uint32_t vertices[64];
-    uint16_t indices[126];
+    uint32_t primitives[42];
     uint16_t vertex_and_index_count;
 };
 
@@ -37,8 +37,7 @@ void ms_main(
     Meshlet meshlet = meshlets[group_id];
 
     uint32_t vertex_count = meshlet.vertex_and_index_count & 0xFF;
-    uint32_t index_count = meshlet.vertex_and_index_count >> 8;
-    uint32_t primitive_count = index_count / 3;
+    uint32_t primitive_count = meshlet.vertex_and_index_count >> 8;
 
     SetMeshOutputCounts(vertex_count, primitive_count);
 
@@ -53,10 +52,11 @@ void ms_main(
         }
 
         if (idx < primitive_count) {
+            uint32_t primitive = meshlet.primitives[idx];
             out_primitives[idx] = uint32_t3(
-                meshlet.indices[(idx * 3) + 0],
-                meshlet.indices[(idx * 3) + 1],
-                meshlet.indices[(idx * 3) + 2]
+                (primitive      ) & 0xFF,
+                (primitive >> 8 ) & 0xFF,
+                (primitive >> 16) & 0xFF
             );
         }
     }
