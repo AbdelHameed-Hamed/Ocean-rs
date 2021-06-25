@@ -35,7 +35,6 @@ struct Vertex {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[repr(align(16))]
 struct Meshlet {
     vertices: [u32; 64],
     primitives: [u32; 42],
