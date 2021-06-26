@@ -546,8 +546,4 @@ quat_ops!();
 
 // !Note: Should probably write a test suite at some point...
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn testing_shit() {
-    }
-}
+mod tests {}

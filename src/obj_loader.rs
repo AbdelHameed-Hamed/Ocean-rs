@@ -1,4 +1,4 @@
-use crate::math::Vec3;
+use crate::math::lin_alg::Vec3;
 
 // Note: God this is an ugly function. Wanna nuke it at some point and do it properly.
 // Returns pair of vectors for vertices and indices

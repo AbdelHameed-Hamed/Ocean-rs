@@ -1,7 +1,7 @@
 extern crate ash;
 extern crate sdl2;
 
-use crate::math::{Mat4, Vec3, Vec4};
+use crate::math::lin_alg::{Mat4, Vec3, Vec4};
 use crate::obj_loader::read_obj_file;
 use crate::vk_initializers;
 
