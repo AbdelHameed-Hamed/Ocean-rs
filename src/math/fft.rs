@@ -97,19 +97,17 @@ macro_rules! complex_ops {
 
 complex_ops!();
 
-fn is_power_of_2(number: usize) -> bool {
-    assert!(number != 0);
-    return (number & (number - 1) == 0);
+pub enum FFTDirection {
+    Forward,
+    Backward,
 }
 
-fn bit_reverse(mut input: Vec<Complex>) -> Vec<Complex> {
-    let N = input.len();
-
-    let bits = (std::mem::size_of::<usize>() * 8) as u32 - N.leading_zeros() - 1;
+fn bit_reverse(input: &mut Vec<Complex>, offset: usize, length: usize) {
+    let bits = (std::mem::size_of::<usize>() * 8) as u32 - length.leading_zeros() - 1;
 
     let mut reverse_index: usize;
 
-    for i in 0..N / 2 {
+    for i in 0..length / 2 {
         reverse_index = 0;
         for j in 0..bits {
             if (i >> j) & 1 > 0 {
@@ -117,26 +115,23 @@ fn bit_reverse(mut input: Vec<Complex>) -> Vec<Complex> {
             }
         }
 
-        input.swap(i, reverse_index);
+        input.swap(i + offset, reverse_index + offset);
     }
-
-    return input;
 }
 
 // Reference: https://en.wikipedia.org/wiki/Cooley–Tukey_FFT_algorithm
-fn cooley_tukey_1d(input: Vec<Complex>, direction: f32) -> Vec<Complex> {
-    let N = input.len();
-    let mut result = bit_reverse(input);
+fn cooley_tukey_1d(input: &mut Vec<Complex>, direction: f32, offset: usize, length: usize) {
+    bit_reverse(input, offset, length);
 
     let (mut W, mut even, mut odd): (Complex, Complex, Complex);
 
-    // 1. stage (N = 8) take log => 3
+    // 1. stage (N = length = 8) take log => 3
     let mut k = 2;
-    while k <= N {
-        // 2. Do fft for each stage
+    while k <= length {
+        // 2. Do fft_1d for each stage
         // each stage is divided into (N / k) groups
         let mut j = 0;
-        while j < N {
+        while j < length {
             // 3. Because of symmetry we do it together
             //  stage1:  stage2:       stage3:
             //  0, 1     0, 2 & 1, 3
@@ -159,13 +154,13 @@ fn cooley_tukey_1d(input: Vec<Complex>, direction: f32) -> Vec<Complex> {
 
                 // Even = DFT of even indexed part
                 // Odd = W * DFT of odd indexed part
-                even = result[i];
-                odd = W * result[idx];
+                even = input[i + offset];
+                odd = W * input[idx + offset];
 
                 // X[k]     = Even + W * Odd
                 // X[k+N/2] = even - W * Odd
-                result[i] = even + odd;
-                result[idx] = even - odd;
+                input[i + offset] = even + odd;
+                input[idx + offset] = even - odd;
             }
 
             j += k;
@@ -173,25 +168,56 @@ fn cooley_tukey_1d(input: Vec<Complex>, direction: f32) -> Vec<Complex> {
 
         k <<= 1;
     }
-
-    return result;
 }
 
-pub fn fft(input: Vec<Complex>) -> Vec<Complex> {
-    assert!(is_power_of_2(input.len()));
-    return cooley_tukey_1d(input, 1.0);
+fn fft_1d(input: &mut Vec<Complex>, offset: usize, length: usize) {
+    assert!(usize::is_power_of_two(length) && input.len() >= (offset + length));
+    cooley_tukey_1d(input, 1.0, offset, length);
 }
 
-pub fn ifft(input: Vec<Complex>) -> Vec<Complex> {
-    let N = input.len();
-    assert!(is_power_of_2(input.len()));
-    let mut result = cooley_tukey_1d(input, -1.0);
+fn ifft_1d(input: &mut Vec<Complex>, offset: usize, length: usize) {
+    assert!(usize::is_power_of_two(length) && input.len() >= (offset + length));
+    cooley_tukey_1d(input, -1.0, offset, length);
 
-    for i in result.iter_mut() {
-        *i /= N as f32;
+    for i in input.iter_mut() {
+        *i /= length as f32;
+    }
+}
+
+pub fn fft_ifft_2d(input: &mut Vec<Complex>, width: usize, height: usize, direction: FFTDirection) {
+    assert!(
+        input.len() == width * height
+            && usize::is_power_of_two(width)
+            && usize::is_power_of_two(height)
+    );
+
+    // First we do the rows
+    for i in 0..height {
+        let offset = i * width;
+        match direction {
+            FFTDirection::Forward => fft_1d(input, offset, width),
+            FFTDirection::Backward => ifft_1d(input, offset, width),
+        }
     }
 
-    return result;
+    // Then we do the columns
+    let mut temp_col: Vec<Complex> = vec![unsafe { std::mem::zeroed() }; height];
+    for i in 0..width {
+        let offset = i;
+        let stride = width;
+        for j in 0..height {
+            temp_col[j] = input[offset + j * stride];
+        }
+
+        match direction {
+            FFTDirection::Forward => fft_1d(&mut temp_col, 0, height),
+            FFTDirection::Backward => ifft_1d(&mut temp_col, 0, height),
+        }
+
+        for j in 0..height {
+            input[offset + j * stride] = temp_col[j];
+        }
+    }
 }
 
 #[cfg(test)]
@@ -202,7 +228,7 @@ mod tests {
     fn bit_reverse_test() {
         {
             #[rustfmt::skip]
-            let input = vec![
+            let mut input = vec![
                 Complex { real: 20.0, imag: 0.0 },
                 Complex { real: 10.0, imag: 0.0 },
                 Complex { real:  5.0, imag: 0.0 },
@@ -217,18 +243,19 @@ mod tests {
                 Complex { real:  2.5, imag: 0.0 }, // 11 -> 11 SAME
             ];
 
-            let output = bit_reverse(input);
+            let length = input.len();
+            bit_reverse(&mut input, 0, length);
 
-            assert_eq!(output.len(), expected_output.len());
-            for i in 0..output.len() {
-                assert_eq!(output[i].real, expected_output[i].real);
-                assert_eq!(output[i].imag, expected_output[i].imag);
+            assert_eq!(input.len(), expected_output.len());
+            for i in 0..input.len() {
+                assert_eq!(input[i].real, expected_output[i].real);
+                assert_eq!(input[i].imag, expected_output[i].imag);
             }
         }
 
         {
             #[rustfmt::skip]
-            let input = vec![
+            let mut input = vec![
                 Complex { real: 320.0, imag: 0.0 },
                 Complex { real: 160.0, imag: 0.0 },
                 Complex { real:  80.0, imag: 0.0 },
@@ -251,12 +278,13 @@ mod tests {
                 Complex { real:   2.5, imag: 0.0 }, // 111 -> 111 SAME
             ];
 
-            let output = bit_reverse(input);
+            let length = input.len();
+            bit_reverse(&mut input, 0, length);
 
-            assert_eq!(output.len(), expected_output.len());
-            for i in 0..output.len() {
-                assert_eq!(output[i].real, expected_output[i].real);
-                assert_eq!(output[i].imag, expected_output[i].imag);
+            assert_eq!(input.len(), expected_output.len());
+            for i in 0..input.len() {
+                assert_eq!(input[i].real, expected_output[i].real);
+                assert_eq!(input[i].imag, expected_output[i].imag);
             }
         }
     }
@@ -285,7 +313,7 @@ mod tests {
     fn fft_test() {
         {
             #[rustfmt::skip]
-            let input = vec![
+            let mut input = vec![
                 Complex { real: 20.0, imag: 0.0 },
                 Complex { real: 10.0, imag: 0.0 },
                 Complex { real:  5.0, imag: 0.0 },
@@ -300,28 +328,20 @@ mod tests {
                 Complex { real: 15.0, imag:  7.5 },
             ];
 
-            let output = fft(input);
+            let length = input.len();
+            fft_1d(&mut input, 0, length);
 
-            assert_eq!(output.len(), expected_output.len());
-            for i in 0..output.len() {
-                assert!(almost_equal(
-                    output[i].real,
-                    expected_output[i].real,
-                    f32::EPSILON * 10.0,
-                    1
-                ));
-                assert!(almost_equal(
-                    output[i].imag,
-                    expected_output[i].imag,
-                    f32::EPSILON * 10.0,
-                    1
-                ));
-            }
+            assert_eq!(input.len(), expected_output.len());
+            #[rustfmt::skip]
+            for i in 0..input.len() {
+                assert!(almost_equal(input[i].real, expected_output[i].real, f32::EPSILON * 10.0, 1));
+                assert!(almost_equal(input[i].imag, expected_output[i].imag, f32::EPSILON * 10.0, 1));
+            };
         }
 
         {
             #[rustfmt::skip]
-            let input = vec![
+            let mut input = vec![
                 Complex { real: 0.0, imag: 0.0 },
                 Complex { real: 0.0, imag: 0.0 },
                 Complex { real: 0.0, imag: 0.0 },
@@ -336,28 +356,20 @@ mod tests {
                 Complex { real: 0.0, imag: 0.0 },
             ];
 
-            let output = fft(input);
+            let length = input.len();
+            fft_1d(&mut input, 0, length);
 
-            assert_eq!(output.len(), expected_output.len());
-            for i in 0..output.len() {
-                assert!(almost_equal(
-                    output[i].real,
-                    expected_output[i].real,
-                    f32::EPSILON * 10.0,
-                    1
-                ));
-                assert!(almost_equal(
-                    output[i].imag,
-                    expected_output[i].imag,
-                    f32::EPSILON * 10.0,
-                    1
-                ));
-            }
+            assert_eq!(input.len(), expected_output.len());
+            #[rustfmt::skip]
+            for i in 0..input.len() {
+                assert!(almost_equal(input[i].real, expected_output[i].real, f32::EPSILON * 10.0, 1));
+                assert!(almost_equal(input[i].imag, expected_output[i].imag, f32::EPSILON * 10.0, 1));
+            };
         }
 
         {
             #[rustfmt::skip]
-            let input = vec![
+            let mut input = vec![
                 Complex { real: 1.0, imag: 0.0 },
                 Complex { real: 1.0, imag: 0.0 },
                 Complex { real: 1.0, imag: 0.0 },
@@ -380,28 +392,20 @@ mod tests {
                 Complex { real: 0.0, imag: 0.0 },
             ];
 
-            let output = fft(input);
+            let length = input.len();
+            fft_1d(&mut input, 0, length);
 
-            assert_eq!(output.len(), expected_output.len());
-            for i in 0..output.len() {
-                assert!(almost_equal(
-                    output[i].real,
-                    expected_output[i].real,
-                    f32::EPSILON * 10.0,
-                    1
-                ));
-                assert!(almost_equal(
-                    output[i].imag,
-                    expected_output[i].imag,
-                    f32::EPSILON * 10.0,
-                    1
-                ));
-            }
+            assert_eq!(input.len(), expected_output.len());
+            #[rustfmt::skip]
+            for i in 0..input.len() {
+                assert!(almost_equal(input[i].real, expected_output[i].real, f32::EPSILON * 10.0, 1));
+                assert!(almost_equal(input[i].imag, expected_output[i].imag, f32::EPSILON * 10.0, 1));
+            };
         }
 
         {
             #[rustfmt::skip]
-            let input = vec![
+            let mut input = vec![
                 Complex { real: 320.0, imag: 0.0 },
                 Complex { real: 160.0, imag: 0.0 },
                 Complex { real:  80.0, imag: 0.0 },
@@ -424,23 +428,15 @@ mod tests {
                 Complex { real: 379.549513, imag:  207.582521 },
             ];
 
-            let output = fft(input);
+            let length = input.len();
+            fft_1d(&mut input, 0, length);
 
-            assert_eq!(output.len(), expected_output.len());
-            for i in 0..output.len() {
-                assert!(almost_equal(
-                    output[i].real,
-                    expected_output[i].real,
-                    f32::EPSILON * 1000.0,
-                    1
-                ));
-                assert!(almost_equal(
-                    output[i].imag,
-                    expected_output[i].imag,
-                    f32::EPSILON * 1000.0,
-                    1
-                ));
-            }
+            assert_eq!(input.len(), expected_output.len());
+            #[rustfmt::skip]
+            for i in 0..input.len() {
+                assert!(almost_equal(input[i].real, expected_output[i].real, f32::EPSILON * 1000.0, 1));
+                assert!(almost_equal(input[i].imag, expected_output[i].imag, f32::EPSILON * 1000.0, 1));
+            };
         }
     }
 
@@ -455,23 +451,16 @@ mod tests {
                 Complex { real:  2.5, imag: 0.0 },
             ];
 
-            let fft_result = fft(input.clone());
-            let result = ifft(fft_result);
+            let length = input.len();
+            let mut result = input.clone();
+            fft_1d(&mut result, 0, input.len());
+            ifft_1d(&mut result, 0, input.len());
 
+            #[rustfmt::skip]
             for i in 0..input.len() {
-                assert!(almost_equal(
-                    result[i].real,
-                    input[i].real,
-                    f32::EPSILON * 10.0,
-                    1
-                ));
-                assert!(almost_equal(
-                    result[i].imag,
-                    input[i].imag,
-                    f32::EPSILON * 10.0,
-                    1
-                ));
-            }
+                assert!(almost_equal(result[i].real, input[i].real, f32::EPSILON * 10.0, 1));
+                assert!(almost_equal(result[i].imag, input[i].imag, f32::EPSILON * 10.0, 1));
+            };
         }
 
         {
@@ -487,23 +476,15 @@ mod tests {
                 Complex { real: 0.0, imag: 0.0 },
             ];
 
-            let fft_result = fft(input.clone());
-            let result = ifft(fft_result);
+            let mut result = input.clone();
+            fft_1d(&mut result, 0, input.len());
+            ifft_1d(&mut result, 0, input.len());
 
+            #[rustfmt::skip]
             for i in 0..input.len() {
-                assert!(almost_equal(
-                    result[i].real,
-                    input[i].real,
-                    f32::EPSILON * 10.0,
-                    1
-                ));
-                assert!(almost_equal(
-                    result[i].imag,
-                    input[i].imag,
-                    f32::EPSILON * 10.0,
-                    1
-                ));
-            }
+                assert!(almost_equal(result[i].real, input[i].real, f32::EPSILON * 10.0, 1));
+                assert!(almost_equal(result[i].imag, input[i].imag, f32::EPSILON * 10.0, 1));
+            };
         }
 
         {
@@ -519,23 +500,15 @@ mod tests {
                 Complex { real: 1.0, imag: 0.0 },
             ];
 
-            let fft_result = fft(input.clone());
-            let result = ifft(fft_result);
+            let mut result = input.clone();
+            fft_1d(&mut result, 0, input.len());
+            ifft_1d(&mut result, 0, input.len());
 
+            #[rustfmt::skip]
             for i in 0..input.len() {
-                assert!(almost_equal(
-                    result[i].real,
-                    input[i].real,
-                    f32::EPSILON * 10.0,
-                    1
-                ));
-                assert!(almost_equal(
-                    result[i].imag,
-                    input[i].imag,
-                    f32::EPSILON * 10.0,
-                    1
-                ));
-            }
+                assert!(almost_equal(result[i].real, input[i].real, f32::EPSILON * 10.0, 1));
+                assert!(almost_equal(result[i].imag, input[i].imag, f32::EPSILON * 10.0, 1));
+            };
         }
 
         {
@@ -551,23 +524,69 @@ mod tests {
                 Complex { real:   2.5, imag: 0.0 },
             ];
 
-            let fft_result = fft(input.clone());
-            let result = ifft(fft_result);
+            let mut result = input.clone();
+            fft_1d(&mut result, 0, input.len());
+            ifft_1d(&mut result, 0, input.len());
 
+            #[rustfmt::skip]
             for i in 0..input.len() {
-                assert!(almost_equal(
-                    result[i].real,
-                    input[i].real,
-                    f32::EPSILON * 1000.0,
-                    1
-                ));
-                assert!(almost_equal(
-                    result[i].imag,
-                    input[i].imag,
-                    f32::EPSILON * 1000.0,
-                    1
-                ));
-            }
+                assert!(almost_equal(result[i].real, input[i].real, f32::EPSILON * 1000.0, 1));
+                assert!(almost_equal(result[i].imag, input[i].imag, f32::EPSILON * 1000.0, 1));
+            };
         }
+    }
+
+    #[test]
+    fn fft_ifft_2d_test() {
+        #[rustfmt::skip]
+        let input = vec![
+            Complex{ real:  1.0, imag: 0.0 },
+            Complex{ real:  2.0, imag: 0.0 },
+            Complex{ real:  3.0, imag: 0.0 },
+            Complex{ real:  4.0, imag: 0.0 },
+            Complex{ real:  5.0, imag: 0.0 },
+            Complex{ real:  6.0, imag: 0.0 },
+            Complex{ real:  7.0, imag: 0.0 },
+            Complex{ real:  8.0, imag: 0.0 },
+            Complex{ real:  9.0, imag: 0.0 },
+            Complex{ real: 10.0, imag: 0.0 },
+            Complex{ real: 11.0, imag: 0.0 },
+            Complex{ real: 12.0, imag: 0.0 },
+            Complex{ real: 13.0, imag: 0.0 },
+            Complex{ real: 14.0, imag: 0.0 },
+            Complex{ real: 15.0, imag: 0.0 },
+            Complex{ real: 16.0, imag: 0.0 },
+        ];
+
+        #[rustfmt::skip]
+        let mut expected_output = vec![
+            Complex{ real: 136.0, imag:   0.0 },
+            Complex{ real:  -8.0, imag:   8.0 },
+            Complex{ real:  -8.0, imag:   0.0 },
+            Complex{ real:  -8.0, imag:  -8.0 },
+            Complex{ real: -32.0, imag:  32.0 },
+            Complex{ real:   0.0, imag:   0.0 },
+            Complex{ real:   0.0, imag:   0.0 },
+            Complex{ real:   0.0, imag:   0.0 },
+            Complex{ real: -32.0, imag:   0.0 },
+            Complex{ real:   0.0, imag:   0.0 },
+            Complex{ real:   0.0, imag:   0.0 },
+            Complex{ real:   0.0, imag:   0.0 },
+            Complex{ real: -32.0, imag: -32.0 },
+            Complex{ real:   0.0, imag:   0.0 },
+            Complex{ real:   0.0, imag:   0.0 },
+            Complex{ real:   0.0, imag:   0.0 },
+        ];
+
+        let mut output = input.clone();
+        fft_ifft_2d(&mut output, 4, 4, FFTDirection::Forward);
+
+        #[rustfmt::skip]
+        for i in 0..input.len() {
+            println!("{}, {}", output[i].real, expected_output[i].real);
+            println!("{}, {}\n", output[i].imag, expected_output[i].imag);
+            assert!(almost_equal(output[i].real, expected_output[i].real, f32::EPSILON * 1000.0, 1));
+            assert!(almost_equal(output[i].imag, expected_output[i].imag, f32::EPSILON * 1000.0, 1));
+        };
     }
 }
