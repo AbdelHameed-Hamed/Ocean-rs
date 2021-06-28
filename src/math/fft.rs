@@ -1,11 +1,10 @@
+use std::f32::consts::PI;
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
-
-const PI: f32 = 3.141592653589793238463;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Complex {
-    real: f32,
-    imag: f32,
+    pub real: f32,
+    pub imag: f32,
 }
 
 impl Mul<Complex> for Complex {
@@ -201,6 +200,8 @@ pub fn fft_ifft_2d(input: &mut Vec<Complex>, width: usize, height: usize, direct
     }
 
     // Then we do the columns
+    // Given that entries in a column are not tightly packed, perhaps it's better to pack them in a
+    // temp array, do the computation there and then unpack them?
     let mut temp_col: Vec<Complex> = vec![unsafe { std::mem::zeroed() }; height];
     for i in 0..width {
         let offset = i;

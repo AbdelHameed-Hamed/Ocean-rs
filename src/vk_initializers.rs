@@ -191,29 +191,24 @@ pub fn create_device(
 
     let mut features16 = vk::PhysicalDevice16BitStorageFeatures::builder()
         .storage_buffer16_bit_access(true)
-        .uniform_and_storage_buffer16_bit_access(true)
-        .build();
+        .uniform_and_storage_buffer16_bit_access(true);
     let mut features_mesh = vk::PhysicalDeviceMeshShaderFeaturesNV::builder()
         .task_shader(true)
-        .mesh_shader(true)
-        .build();
-    let mut features = vk::PhysicalDeviceFeatures2::builder()
-        .features(
-            vk::PhysicalDeviceFeatures::builder()
-                .shader_clip_distance(true)
-                .shader_int16(true)
-                .fill_mode_non_solid(true)
-                .build(),
-        )
-        .build();
+        .mesh_shader(true);
+    let mut features = vk::PhysicalDeviceFeatures2::builder().features(
+        vk::PhysicalDeviceFeatures::builder()
+            .shader_clip_distance(true)
+            .shader_int16(true)
+            .fill_mode_non_solid(true)
+            .build(),
+    );
 
     let device_create_info = vk::DeviceCreateInfo::builder()
         .queue_create_infos(&queue_info)
         .enabled_extension_names(&device_extensions_names_raw)
         .push_next(&mut features16)
         .push_next(&mut features_mesh)
-        .push_next(&mut features)
-        .build();
+        .push_next(&mut features);
 
     let device = unsafe {
         instance
@@ -336,6 +331,7 @@ pub fn create_renderpass(surface_format: &vk::SurfaceFormatKHR, device: &Device)
         .attachment(0)
         .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
         .build();
+    let color_attachment_references = [color_attachment_reference];
 
     let depth_attachment = vk::AttachmentDescription::builder()
         .format(vk::Format::D32_SFLOAT)
@@ -349,19 +345,19 @@ pub fn create_renderpass(surface_format: &vk::SurfaceFormatKHR, device: &Device)
         .build();
     let depth_attachment_reference = vk::AttachmentReference::builder()
         .attachment(1)
-        .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-        .build();
+        .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
     let subpass = vk::SubpassDescription::builder()
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(&[color_attachment_reference])
+        .color_attachments(&color_attachment_references)
         .depth_stencil_attachment(&depth_attachment_reference)
         .build();
+    let subpasses = [subpass];
 
+    let attachments = [color_attachment, depth_attachment];
     let renderpass_create_info = vk::RenderPassCreateInfo::builder()
-        .attachments(&[color_attachment, depth_attachment])
-        .subpasses(&[subpass])
-        .build();
+        .attachments(&attachments)
+        .subpasses(&subpasses);
     return unsafe {
         device
             .create_render_pass(&renderpass_create_info, None)
@@ -380,13 +376,13 @@ pub fn create_framebuffers(
     return swapchain_image_views
         .iter()
         .map(|&image| {
+            let attachments = [image, depth_image_view];
             let framebuffer_create_info = vk::FramebufferCreateInfo::builder()
                 .render_pass(*render_pass)
-                .attachments(&[image, depth_image_view])
+                .attachments(&attachments)
                 .width(width)
                 .height(height)
-                .layers(1)
-                .build();
+                .layers(1);
             unsafe {
                 device
                     .create_framebuffer(&framebuffer_create_info, None)
@@ -402,8 +398,7 @@ pub fn create_command_pool_and_buffer(
 ) -> (vk::CommandPool, Vec<vk::CommandBuffer>) {
     let command_pool_create_info = vk::CommandPoolCreateInfo::builder()
         .queue_family_index(queue_family_index)
-        .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-        .build();
+        .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
     let command_pool = unsafe {
         device
             .create_command_pool(&command_pool_create_info, None)
@@ -413,8 +408,7 @@ pub fn create_command_pool_and_buffer(
     let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::builder()
         .command_pool(command_pool)
         .command_buffer_count(1)
-        .level(vk::CommandBufferLevel::PRIMARY)
-        .build();
+        .level(vk::CommandBufferLevel::PRIMARY);
     let command_buffer = unsafe {
         device
             .allocate_command_buffers(&command_buffer_allocate_info)
@@ -429,9 +423,7 @@ pub fn create_shader_module(device: &Device, filepath: &str) -> vk::ShaderModule
     // !Note: This might bite me later due to endianess.
     let (_, shader_binary, _) = unsafe { shader_binary_as_bytes.align_to::<u32>() };
 
-    let shader_module_create_info = vk::ShaderModuleCreateInfo::builder()
-        .code(shader_binary)
-        .build();
+    let shader_module_create_info = vk::ShaderModuleCreateInfo::builder().code(shader_binary);
     let shader_module = unsafe {
         device
             .create_shader_module(&shader_module_create_info, None)
@@ -519,8 +511,7 @@ pub fn create_buffer(
     let buffer_create_info = vk::BufferCreateInfo::builder()
         .size(size)
         .usage(usage)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .build();
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
     let buffer = unsafe { device.create_buffer(&buffer_create_info, None).unwrap() };
 
     let memory_properties =
@@ -543,8 +534,7 @@ pub fn create_buffer(
 
     let memory_allocate_info = vk::MemoryAllocateInfo::builder()
         .allocation_size(memory_requirements.size)
-        .memory_type_index(memory_type)
-        .build();
+        .memory_type_index(memory_type);
     let buffer_memory = unsafe { device.allocate_memory(&memory_allocate_info, None).unwrap() };
 
     unsafe { device.bind_buffer_memory(buffer, buffer_memory, 0).unwrap() };
@@ -562,17 +552,15 @@ pub fn copy_buffer(
 ) {
     let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::builder()
         .command_pool(command_pool)
-        .command_buffer_count(1)
-        .build();
+        .command_buffer_count(1);
     let command_buffer = unsafe {
         device
             .allocate_command_buffers(&command_buffer_allocate_info)
             .unwrap()[0]
     };
 
-    let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder()
-        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-        .build();
+    let command_buffer_begin_info =
+        vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
     unsafe {
         device
             .begin_command_buffer(command_buffer, &command_buffer_begin_info)
@@ -584,18 +572,20 @@ pub fn copy_buffer(
         .dst_offset(0)
         .size(size)
         .build();
+    let buffer_copy_regions = [buffer_copy_region];
     unsafe {
-        device.cmd_copy_buffer(command_buffer, src, dst, &[buffer_copy_region]);
+        device.cmd_copy_buffer(command_buffer, src, dst, &buffer_copy_regions);
         device.end_command_buffer(command_buffer).unwrap();
     };
 
     let submit_info = vk::SubmitInfo::builder()
         .command_buffers(&[command_buffer])
         .build();
+    let submit_infos = [submit_info];
 
     unsafe {
         device
-            .queue_submit(graphics_queue, &[submit_info], vk::Fence::null())
+            .queue_submit(graphics_queue, &submit_infos, vk::Fence::null())
             .unwrap();
         device.queue_wait_idle(graphics_queue).unwrap();
         device.free_command_buffers(command_pool, &[command_buffer]);
@@ -657,8 +647,7 @@ pub fn create_image(
 
     let memory_allocate_info = vk::MemoryAllocateInfo::builder()
         .allocation_size(memory_requirements.size)
-        .memory_type_index(memory_type)
-        .build();
+        .memory_type_index(memory_type);
     let image_memory = unsafe { device.allocate_memory(&memory_allocate_info, None).unwrap() };
 
     unsafe { device.bind_image_memory(image, image_memory, 0).unwrap() };

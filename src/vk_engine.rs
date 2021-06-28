@@ -1,7 +1,9 @@
 extern crate ash;
 extern crate sdl2;
 
-use crate::math::lin_alg::{Mat4, Vec3, Vec4};
+use crate::math::fft::Complex;
+use crate::math::lin_alg::{Mat4, Vec2, Vec3, Vec4};
+use crate::math::rand::{box_muller_rng, xorshift32};
 use crate::obj_loader::read_obj_file;
 use crate::vk_initializers;
 
@@ -11,7 +13,7 @@ use ash::extensions::{
     nv::MeshShader,
 };
 use ash::version::{DeviceV1_0, InstanceV1_0};
-use ash::{vk, vk::PhysicalDevice, Device, Instance};
+use ash::{vk, Device, Instance};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::video::Window;
@@ -78,6 +80,7 @@ struct SceneData {
 
 const FRAME_OVERLAP: usize = 2;
 const MAX_OBJECTS: usize = 10_000;
+const OCEAN_PATCH_DIM: usize = 2048;
 
 struct FrameData {
     present_semaphore: vk::Semaphore,
@@ -160,16 +163,17 @@ impl VkPipelineBuilder {
     }
 
     pub fn build_pipline(&self, render_pass: &vk::RenderPass, device: &Device) -> vk::Pipeline {
+        let viewports = [self.viewport];
+        let scissors = [self.scissor];
         let viewport_state_create_info = vk::PipelineViewportStateCreateInfo::builder()
-            .viewports(&[self.viewport])
-            .scissors(&[self.scissor])
-            .build();
+            .viewports(&viewports)
+            .scissors(&scissors);
 
+        let attachments = [self.color_blend_attachment];
         let color_blend_state_create_info = vk::PipelineColorBlendStateCreateInfo::builder()
             .logic_op_enable(false)
             .logic_op(vk::LogicOp::COPY)
-            .attachments(&[self.color_blend_attachment])
-            .build();
+            .attachments(&attachments);
 
         let pipeline_create_info = vk::GraphicsPipelineCreateInfo::builder()
             .stages(self.shader_stages.as_slice())
@@ -183,9 +187,10 @@ impl VkPipelineBuilder {
             .layout(self.pipeline_layout)
             .render_pass(*render_pass)
             .build();
+        let pipeline_create_infos = [pipeline_create_info];
         let pipeline = unsafe {
             device
-                .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_create_info], None)
+                .create_graphics_pipelines(vk::PipelineCache::null(), &pipeline_create_infos, None)
                 .unwrap()
         };
 
@@ -332,9 +337,8 @@ impl VkEngine {
             vk::ShaderStageFlags::MESH_NV | vk::ShaderStageFlags::FRAGMENT,
         );
 
-        let global_set_info = vk::DescriptorSetLayoutCreateInfo::builder()
-            .bindings(&[scene_buffer_binding])
-            .build();
+        let bindings = [scene_buffer_binding];
+        let global_set_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
         let global_set_layout = unsafe {
             device
                 .create_descriptor_set_layout(&global_set_info, None)
@@ -348,39 +352,38 @@ impl VkEngine {
             vk::ShaderStageFlags::VERTEX,
         );
 
-        let object_set_info = vk::DescriptorSetLayoutCreateInfo::builder()
-            .bindings(&[object_buffer_binding])
-            .build();
+        let bindings = [object_buffer_binding];
+        let object_set_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
         let object_set_layout = unsafe {
             device
                 .create_descriptor_set_layout(&object_set_info, None)
                 .unwrap()
         };
 
+        let pool_sizes = [
+            vk::DescriptorPoolSize::builder()
+                .ty(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
+                .descriptor_count(10)
+                .build(),
+            vk::DescriptorPoolSize::builder()
+                .ty(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(10)
+                .build(),
+        ];
         let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
             .max_sets(10)
-            .pool_sizes(&[
-                vk::DescriptorPoolSize::builder()
-                    .ty(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
-                    .descriptor_count(10)
-                    .build(),
-                vk::DescriptorPoolSize::builder()
-                    .ty(vk::DescriptorType::STORAGE_BUFFER)
-                    .descriptor_count(10)
-                    .build(),
-            ])
-            .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
-            .build();
+            .pool_sizes(&pool_sizes)
+            .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
         let descriptor_pool = unsafe {
             device
                 .create_descriptor_pool(&descriptor_pool_info, None)
                 .unwrap()
         };
 
+        let set_layouts = [global_set_layout];
         let global_descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
-            .set_layouts(&[global_set_layout])
-            .build();
+            .set_layouts(&set_layouts);
         let global_descriptor_set = unsafe {
             device
                 .allocate_descriptor_sets(&global_descriptor_set_allocate_info)
@@ -403,12 +406,12 @@ impl VkEngine {
             .offset(0)
             .range(size_of::<SceneData>() as u64)
             .build();
-
+        let scene_buffer_infos = [scene_buffer_info];
         let scene_set_write = vk::WriteDescriptorSet::builder()
             .dst_binding(0)
             .dst_set(global_descriptor_set)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
-            .buffer_info(&[scene_buffer_info])
+            .buffer_info(&scene_buffer_infos)
             .build();
 
         unsafe { device.update_descriptor_sets(&[scene_set_write], &[]) };
@@ -427,9 +430,8 @@ impl VkEngine {
                     .unwrap()
             };
 
-            let fence_create_info = vk::FenceCreateInfo::builder()
-                .flags(vk::FenceCreateFlags::SIGNALED)
-                .build();
+            let fence_create_info =
+                vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
             let render_fence = unsafe { device.create_fence(&fence_create_info, None).unwrap() };
 
             let (command_pool, command_buffers) =
@@ -466,20 +468,19 @@ impl VkEngine {
             vk::ShaderStageFlags::MESH_NV,
         );
 
+        let bindings = [meshlet_buffer_binding, vertex_buffer_binding];
         let meshlet_and_vertex_descriptor_layout_info =
-            vk::DescriptorSetLayoutCreateInfo::builder()
-                .bindings(&[meshlet_buffer_binding, vertex_buffer_binding])
-                .build();
+            vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
         let meshlet_and_vertex_descriptor_layout = unsafe {
             device
                 .create_descriptor_set_layout(&meshlet_and_vertex_descriptor_layout_info, None)
                 .unwrap()
         };
 
+        let set_layouts = [meshlet_and_vertex_descriptor_layout];
         let meshlet_and_vertex_descriptor_allocate_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
-            .set_layouts(&[meshlet_and_vertex_descriptor_layout])
-            .build();
+            .set_layouts(&set_layouts);
         let meshlet_and_vertex_descriptor_set = unsafe {
             device
                 .allocate_descriptor_sets(&meshlet_and_vertex_descriptor_allocate_info)
@@ -514,11 +515,12 @@ impl VkEngine {
             .offset(0)
             .range(meshlet_buffer_size)
             .build();
+        let meshlet_buffer_infos = [meshlet_buffer_info];
         let meshlet_set_write = vk::WriteDescriptorSet::builder()
             .dst_set(meshlet_and_vertex_descriptor_set)
             .dst_binding(0)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&[meshlet_buffer_info])
+            .buffer_info(&meshlet_buffer_infos)
             .build();
 
         let vertex_buffer_size = (size_of::<Vertex>() * vertices.len()) as u64;
@@ -549,11 +551,12 @@ impl VkEngine {
             .offset(0)
             .range(vertex_buffer_size)
             .build();
+        let vertex_buffer_infos = [vertex_buffer_info];
         let vertex_set_write = vk::WriteDescriptorSet::builder()
             .dst_set(meshlet_and_vertex_descriptor_set)
             .dst_binding(1)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&[vertex_buffer_info])
+            .buffer_info(&vertex_buffer_infos)
             .build();
 
         unsafe { device.update_descriptor_sets(&[meshlet_set_write, vertex_set_write], &[]) };
@@ -562,8 +565,7 @@ impl VkEngine {
             device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::builder()
-                        .set_layouts(&[global_set_layout, meshlet_and_vertex_descriptor_layout])
-                        .build(),
+                        .set_layouts(&[global_set_layout, meshlet_and_vertex_descriptor_layout]),
                     None,
                 )
                 .unwrap()
@@ -596,11 +598,12 @@ impl VkEngine {
         pipeline_builder.input_assembly =
             vk_initializers::input_assembly_create_info(&vk::PrimitiveTopology::TRIANGLE_LIST);
 
+        let (width_f32, height_f32) = (width as f32, height as f32);
         pipeline_builder.viewport = vk::Viewport::builder()
             .x(0.0f32)
             .y(0.0f32)
-            .width(width as f32)
-            .height(height as f32)
+            .width(width_f32)
+            .height(height_f32)
             .min_depth(0.0f32)
             .max_depth(1.0f32)
             .build();
@@ -635,6 +638,61 @@ impl VkEngine {
         );
 
         let mesh_shader = MeshShader::new(&instance, &device);
+
+        let mut tilde_h_zero: Vec<Complex> =
+            vec![unsafe { std::mem::zeroed() }; OCEAN_PATCH_DIM * OCEAN_PATCH_DIM];
+        let mut tilde_h_conjugate_zero: Vec<Complex> =
+            vec![unsafe { std::mem::zeroed() }; OCEAN_PATCH_DIM * OCEAN_PATCH_DIM];
+
+        let amplitude = 20.0;
+        let wind_speed = 26.0;
+        let wind_direction = Vec2 { x: 1.0, y: 0.0 };
+        let g = 9.81;
+        let L = wind_speed * wind_speed / g;
+
+        let mut rnd_state = 1;
+
+        for i in 0..OCEAN_PATCH_DIM {
+            for j in 0..OCEAN_PATCH_DIM {
+                let k = Vec2 {
+                    x: i as f32,
+                    y: j as f32,
+                };
+                let k_length_sqr = k.length_sqr();
+
+                let b = f32::exp(-1.0 / (k_length_sqr * L * L)) / (k_length_sqr * k_length_sqr);
+                let c = f32::powi(Vec2::dot(k.normal(), wind_direction), 2);
+
+                let phillips_k = amplitude * b * c;
+
+                let k = Vec2 {
+                    x: -(i as f32),
+                    y: -(j as f32),
+                };
+
+                let c = f32::powi(Vec2::dot(k.normal(), wind_direction), 2);
+
+                let phillips_minus_k = amplitude * b * c;
+
+                let h_zero_k = f32::sqrt(phillips_k) * (1.0 / std::f32::consts::SQRT_2);
+                let h_zero_minus_k = f32::sqrt(phillips_minus_k) * (1.0 / std::f32::consts::SQRT_2);
+
+                let (u1, u2) = (xorshift32(&mut rnd_state), xorshift32(&mut rnd_state));
+                let (z1, z2) =
+                    box_muller_rng(u1 as f32 / u32::MAX as f32, u2 as f32 / u32::MAX as f32);
+
+                tilde_h_zero[i * OCEAN_PATCH_DIM + j] = Complex { real: z1, imag: z2 } * h_zero_k;
+
+                let (u1, u2) = (xorshift32(&mut rnd_state), xorshift32(&mut rnd_state));
+                let (z1, z2) =
+                    box_muller_rng(u1 as f32 / u32::MAX as f32, u2 as f32 / u32::MAX as f32);
+
+                tilde_h_conjugate_zero[i * OCEAN_PATCH_DIM + j] = Complex {
+                    real: z1,
+                    imag: -z2,
+                } * h_zero_minus_k;
+            }
+        }
 
         return VkEngine {
             sdl_context,
@@ -886,8 +944,7 @@ impl VkEngine {
             .unwrap();
 
         let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-            .build();
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         self.device
             .begin_command_buffer(frame_data.command_buffer, &command_buffer_begin_info)
             .unwrap();
@@ -905,6 +962,7 @@ impl VkEngine {
         let mut depth_clear_value = vk::ClearValue::default();
         depth_clear_value.depth_stencil.depth = 1.0f32;
 
+        let clear_values = [clear_value, depth_clear_value];
         let renderpass_begin_info = vk::RenderPassBeginInfo::builder()
             .render_pass(self.render_pass)
             .render_area(vk::Rect2D {
@@ -912,8 +970,7 @@ impl VkEngine {
                 extent: self.size,
             })
             .framebuffer(self.framebuffers[swapchain_image_index as usize])
-            .clear_values(&[clear_value, depth_clear_value])
-            .build();
+            .clear_values(&clear_values);
         self.device.cmd_begin_render_pass(
             frame_data.command_buffer,
             &renderpass_begin_info,
@@ -997,15 +1054,18 @@ impl VkEngine {
             .signal_semaphores(&[frame_data.render_semaphore])
             .command_buffers(&[frame_data.command_buffer])
             .build();
+        let submit_infos = [submit_info];
         self.device
-            .queue_submit(self.graphics_queue, &[submit_info], frame_data.render_fence)
+            .queue_submit(self.graphics_queue, &submit_infos, frame_data.render_fence)
             .unwrap();
 
+        let swapchains = [self.swapchain];
+        let wait_semaphores = [frame_data.render_semaphore];
+        let image_indices = [swapchain_image_index];
         let present_info = vk::PresentInfoKHR::builder()
-            .swapchains(&[self.swapchain])
-            .wait_semaphores(&[frame_data.render_semaphore])
-            .image_indices(&[swapchain_image_index])
-            .build();
+            .swapchains(&swapchains)
+            .wait_semaphores(&wait_semaphores)
+            .image_indices(&image_indices);
         self.swapchain_loader
             .queue_present(self.graphics_queue, &present_info)
             .unwrap();

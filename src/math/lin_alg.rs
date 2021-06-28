@@ -1,5 +1,42 @@
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
+#[derive(Clone, Copy, Debug)]
+pub struct Vec2 {
+    pub x: f32, pub y: f32,
+}
+
+impl Vec2 {
+    pub fn new(data: f32) -> Vec2 {
+        return Vec2 { x: data, y: data };
+    }
+
+    pub fn dot(lhs: Vec2, rhs: Vec2) -> f32 {
+        return lhs.x * rhs.x + lhs.y * rhs.y;
+    }
+
+    pub fn length_sqr(self) -> f32 {
+        return Self::dot(self, self);
+    }
+
+    pub fn length(self) -> f32 {
+        return self.length_sqr().sqrt();
+    }
+
+    pub fn normalize(mut self) {
+        let length = self.length();
+
+        self.x /= length;
+        self.y /= length;
+    }
+
+    pub fn normal(self) -> Vec2 {
+        let result = self.clone();
+        result.normalize();
+
+        return result;
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct Vec3 {
     pub x: f32, pub y: f32, pub z: f32,
