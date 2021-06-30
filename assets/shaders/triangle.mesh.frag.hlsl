@@ -33,7 +33,8 @@ void ms_main(
     in uint32_t group_id: SV_GroupID,
     in uint32_t group_thread_id: SV_GroupThreadID,
     out vertices OutputVertex out_verts[64],
-    out indices uint32_t3 out_primitives[42]) {
+    out indices uint32_t3 out_primitives[42])
+{
     Meshlet meshlet = meshlets[group_id];
 
     uint32_t vertex_count = meshlet.vertex_and_index_count & 0xFF;
