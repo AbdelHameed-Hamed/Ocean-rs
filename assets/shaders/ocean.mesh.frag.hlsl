@@ -8,15 +8,41 @@ cbuffer SceneData: register(b0, space0) {
     float4 sunlight_color;
 };
 
+struct Complex {
+    float real;
+    float imag;
+};
+
+Complex complex_mul(Complex lhs, Complex rhs) {
+    Complex result = {
+        lhs.real * rhs.real - lhs.imag * rhs.imag,
+        lhs.real * rhs.imag + lhs.imag * rhs.real
+    };
+
+    return result;
+}
+
+Complex complex_exp(float imag) {
+    Complex result = {
+        cos(imag),
+        sin(imag)
+    };
+
+    return result;
+}
+
+StructuredBuffer<Complex> tilde_h_zero: register(t0, space1);
+StructuredBuffer<Complex> tilde_h_zero_conjugate: register(t1, space1);
+
 struct OutputVertex {
     float4 pos: SV_Position;
 };
 
-// Here we wanna generate an 8x8 ocean patch and figure out where its triangles and verts are gonna lie
-// in world space, this'll generate 81 vertices and 128 triangles.
-#define patch_dim 8
-#define patch_vertex_count ((patch_dim + 1) * (patch_dim + 1))
-#define patch_triangle_count (patch_dim * patch_dim * 2)
+// Here we wanna generate a 12x12 ocean patch and figure out where its triangles and verts are gonna lie
+// in world space, this'll generate 144 vertices and 242 triangles.
+#define patch_dim 12
+#define patch_vertex_count (patch_dim * patch_dim)
+#define patch_triangle_count ((patch_dim - 1) * (patch_dim - 1) * 2)
 
 [outputtopology("triangle")]
 [numthreads(32, 1, 1)]
@@ -28,55 +54,36 @@ void ms_main(
 {
     SetMeshOutputCounts(patch_vertex_count, patch_triangle_count);
 
-    for (uint i = 0; i < 2; ++i) {
-        uint quad_idx = group_thread_id * 2 + i;
+    // We start off by figuring where our vertices and triangles are, transform and register them.
+    uint num_iterations = ceil(patch_vertex_count / 32.0);
+    for (uint i = 0; i < num_iterations; ++i) {
+        uint vert_idx = group_thread_id * num_iterations + i;
+        if (vert_idx < patch_vertex_count) {
+            uint x = vert_idx % patch_dim;
+            uint z = vert_idx / patch_dim;
 
-        // Index of this quad's upper left vertex
-        uint upper_left_x = quad_idx % patch_dim;
-        uint upper_left_y = quad_idx / patch_dim;
-        uint upper_left_vert_idx = upper_left_y * (patch_dim + 1) + upper_left_x;
+            // Transform the vertex and register it
+            out_verts[vert_idx].pos = mul(mul(projection, view), float4(x + 1, 0.0, z + 1, 1.0));
 
-        // Transform the vertex and register it
-        out_verts[upper_left_vert_idx].pos = mul(
-            mul(projection, view),
-            float4(upper_left_x, upper_left_y, 0.0, 1.0)
-        );
+            // Now figure which quad you represent and register its triangles
+            if (x < (patch_dim - 1) && z < (patch_dim - 1)) {
+                uint quad_idx = z * (patch_dim - 1) + x;
 
-        // Register the lower triangle
-        out_tris[quad_idx * 2] = uint3(
-            upper_left_vert_idx,
-            upper_left_vert_idx + (patch_dim + 1),
-            upper_left_vert_idx + (patch_dim + 1) + 1
-        );
+                // Lower triangle, counter clockwise order
+                out_tris[quad_idx * 2] = uint3(
+                    vert_idx,                 // Upper left corner
+                    vert_idx + patch_dim,     // Lower Left corner
+                    vert_idx + patch_dim + 1  // Lower right corner
+                );
 
-        // Register the upper triangle
-        out_tris[(quad_idx * 2) + 1] = uint3(
-            upper_left_vert_idx,
-            upper_left_vert_idx + (patch_dim + 1) + 1,
-            upper_left_vert_idx + 1
-        );
-    }
-
-    // Leftover vertices on the bottom and right of the patch.
-    // 81 - 64 = 17 vertex to be transformed and registered.
-    if (group_thread_id < 17) {
-        // I wonder if this worth avoiding the extra branch...
-        uint temp = group_thread_id / 8;
-        uint is_bottom = ((temp & 2) >> 1) ^ ((temp & 1) ^ 1);
-        uint is_right = temp & 1;
-        uint is_bottom_right = temp >> 1;
-
-        // Crashes DXC?????????????????????????
-        // if (is_bottom_right > 1) {
-        //     printf("%d\n\n", group_thread_id);
-        // }
-
-        uint offset = group_thread_id % 8;
-        uint x = (is_right * patch_dim) + (is_bottom *    offset) + (is_bottom_right * patch_dim);
-        uint y = (is_right *    offset) + (is_bottom * patch_dim) + (is_bottom_right * patch_dim);
-        uint vert_idx = y * (patch_dim + 1) + x;
-
-        out_verts[vert_idx].pos = mul(mul(projection, view), float4(x, y, 0.0, 1.0));
+                // Upper triangle, counter clockwise order
+                out_tris[(quad_idx * 2) + 1] = uint3(
+                    vert_idx,                 // Upper left corner
+                    vert_idx + patch_dim + 1, // Lower right corner
+                    vert_idx + 1              // Upper right corner
+                );
+            }
+        }
     }
 }
 

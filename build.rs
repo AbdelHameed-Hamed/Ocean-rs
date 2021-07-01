@@ -2,7 +2,7 @@ use std::fs;
 use std::process::Command;
 
 // Example:
-// dxc -T vs_6_5 -E vs_main -Zi -spirv ./assets/shaders/triangle.vert.frag.hlsl -Fo ./shaders/triangle.vert
+// dxc -T ms_6_5 -E ms_main -Zi -spirv ./assets/shaders/ocean.mesh.frag.hlsl -Fo ./shaders/ocean.mesh.spv
 
 fn main() {
     for entry in fs::read_dir("./assets/shaders/").expect("Path doesn't exist") {
