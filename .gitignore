@@ -3,3 +3,5 @@ launch.json
 settings.json
 Cargo.lock
 *.spv
+.vs/
+*.sln

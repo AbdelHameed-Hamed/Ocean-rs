@@ -1,4 +1,5 @@
 extern crate ash;
+extern crate image;
 extern crate sdl2;
 
 use crate::math::fft::Complex;
@@ -12,10 +13,12 @@ use ash::extensions::{
     khr::{Surface, Swapchain},
     nv::MeshShader,
 };
-use ash::version::{DeviceV1_0, InstanceV1_0};
+use ash::version::{DeviceV1_0, InstanceV1_0, InstanceV1_1};
 use ash::{vk, Device, Instance};
+use image::{GenericImage, GenericImageView, ImageBuffer, RgbImage};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
+use sdl2::sys::M_PI;
 use sdl2::video::Window;
 use std::collections::HashMap;
 use std::mem::size_of;
@@ -80,7 +83,7 @@ struct SceneData {
 
 const FRAME_OVERLAP: usize = 2;
 const MAX_OBJECTS: usize = 10_000;
-const OCEAN_PATCH_DIM: usize = 2048;
+const OCEAN_PATCH_DIM: usize = 512;
 
 struct FrameData {
     present_semaphore: vk::Semaphore,
@@ -231,6 +234,8 @@ pub struct VkEngine {
     last_timestamp: std::time::Instant,
     mesh_shader_data: MeshShaderData,
     mesh_shader: MeshShader,
+    compute_pipelines: Vec<vk::Pipeline>,
+    start: std::time::Instant,
 }
 
 impl VkEngine {
@@ -254,6 +259,17 @@ impl VkEngine {
 
         let physical_device_properties =
             unsafe { instance.get_physical_device_properties(physical_device) };
+
+        let mut AAAAAAAAAAAAA = vk::PhysicalDeviceMeshShaderPropertiesNV {
+            ..Default::default()
+        };
+        let temp = unsafe {
+            let mut prop = vk::PhysicalDeviceProperties2::builder().push_next(&mut AAAAAAAAAAAAA);
+            instance.get_physical_device_properties2(physical_device, &mut prop);
+            prop
+        };
+
+        println!("{}", temp.properties.api_version);
 
         let device =
             vk_initializers::create_device(queue_family_index, &instance, &physical_device);
@@ -334,7 +350,9 @@ impl VkEngine {
             vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
             0,
             1,
-            vk::ShaderStageFlags::MESH_NV | vk::ShaderStageFlags::FRAGMENT,
+            vk::ShaderStageFlags::COMPUTE
+                | vk::ShaderStageFlags::MESH_NV
+                | vk::ShaderStageFlags::FRAGMENT,
         );
 
         let bindings = [scene_buffer_binding];
@@ -451,130 +469,297 @@ impl VkEngine {
             };
         }
 
-        let (positions, normals, indices) = read_obj_file("./assets/models/monkey.obj");
-        let vertices = Vertex::construct_vertices_from_positions(positions, normals);
-        let meshlets = Self::build_meshlets(indices, vertices.len());
+        let mut tilde_h_zero: Vec<Complex> =
+            vec![unsafe { std::mem::zeroed() }; OCEAN_PATCH_DIM * OCEAN_PATCH_DIM];
+        let mut tilde_h_conjugate_zero: Vec<Complex> =
+            vec![unsafe { std::mem::zeroed() }; OCEAN_PATCH_DIM * OCEAN_PATCH_DIM];
 
-        let meshlet_buffer_binding = vk_initializers::descriptor_set_layout_binding(
+        let amplitude = 20.0;
+        let wind_speed = 26.0;
+        let wind_direction = Vec2 { x: 1.0, y: 0.0 };
+        let g = 9.81;
+        let L = wind_speed * wind_speed / g;
+
+        let mut rnd_state = 1;
+
+        let mut tilde_h_img: RgbImage =
+            ImageBuffer::new(OCEAN_PATCH_DIM as u32, OCEAN_PATCH_DIM as u32);
+
+        let mut counter = 0;
+
+        for i in 0..OCEAN_PATCH_DIM {
+            for j in 0..OCEAN_PATCH_DIM {
+                let k = Vec2 {
+                    x: i as f32 * 2.0 * std::f32::consts::PI / OCEAN_PATCH_DIM as f32,
+                    y: j as f32 * 2.0 * std::f32::consts::PI / OCEAN_PATCH_DIM as f32,
+                };
+                let k_length_sqr = if k.length_sqr() < (0.0001 * 0.0001) {
+                    0.0001 * 0.0001
+                } else {
+                    k.length_sqr()
+                };
+
+                let b = f32::exp(-1.0 / (k_length_sqr * L * L)) / (k_length_sqr * k_length_sqr);
+                let c = f32::powi(Vec2::dot(k.normal(), wind_direction.normal()), 2);
+
+                let phillips_k = amplitude * b * c;
+
+                let k = Vec2 {
+                    x: -(i as f32) * 2.0 * std::f32::consts::PI / OCEAN_PATCH_DIM as f32,
+                    y: -(j as f32) * 2.0 * std::f32::consts::PI / OCEAN_PATCH_DIM as f32,
+                };
+
+                let c = f32::powi(Vec2::dot(k.normal(), wind_direction), 2);
+
+                let phillips_minus_k = amplitude * b * c;
+
+                let h_zero_k = f32::sqrt(phillips_k) / std::f32::consts::SQRT_2;
+                let h_zero_minus_k = f32::sqrt(phillips_minus_k) / std::f32::consts::SQRT_2;
+
+                let (u1, u2) = (xorshift32(&mut rnd_state), xorshift32(&mut rnd_state));
+                let (z1, z2) =
+                    box_muller_rng(u1 as f32 / u32::MAX as f32, u2 as f32 / u32::MAX as f32);
+
+                let temp = Complex { real: z1, imag: z2 } * h_zero_k;
+                tilde_h_zero[i * OCEAN_PATCH_DIM + j] = temp;
+
+                tilde_h_img.put_pixel(
+                    i as u32,
+                    j as u32,
+                    image::Rgb {
+                        0: [
+                            f32::clamp(temp.real * 255.0, 0.0, 255.0) as u8,
+                            f32::clamp(temp.imag * 255.0, 0.0, 255.0) as u8,
+                            0,
+                        ],
+                    },
+                );
+
+                let (u1, u2) = (xorshift32(&mut rnd_state), xorshift32(&mut rnd_state));
+                let (z1, z2) =
+                    box_muller_rng(u1 as f32 / u32::MAX as f32, u2 as f32 / u32::MAX as f32);
+
+                tilde_h_conjugate_zero[i * OCEAN_PATCH_DIM + j] = Complex {
+                    real: z1,
+                    imag: -z2,
+                } * h_zero_minus_k;
+            }
+        }
+
+        println!("{}", counter);
+
+        tilde_h_img.save("./tilde_h_img.png").unwrap();
+
+        let tilda_h_binding = vk_initializers::descriptor_set_layout_binding(
             vk::DescriptorType::STORAGE_BUFFER,
             0,
             1,
-            vk::ShaderStageFlags::MESH_NV,
+            vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::MESH_NV,
         );
-        let vertex_buffer_binding = vk_initializers::descriptor_set_layout_binding(
+        let tilda_h_conjugate_binding = vk_initializers::descriptor_set_layout_binding(
             vk::DescriptorType::STORAGE_BUFFER,
             1,
             1,
-            vk::ShaderStageFlags::MESH_NV,
+            vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::MESH_NV,
+        );
+        let tilda_h_t_binding = vk_initializers::descriptor_set_layout_binding(
+            vk::DescriptorType::STORAGE_BUFFER,
+            2,
+            1,
+            vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::MESH_NV,
         );
 
-        let bindings = [meshlet_buffer_binding, vertex_buffer_binding];
-        let meshlet_and_vertex_descriptor_layout_info =
+        let bindings = [
+            tilda_h_binding,
+            tilda_h_conjugate_binding,
+            tilda_h_t_binding,
+        ];
+        let tilda_hs_descriptor_layout_info =
             vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
-        let meshlet_and_vertex_descriptor_layout = unsafe {
+        let tilda_hs_descriptor_layout = unsafe {
             device
-                .create_descriptor_set_layout(&meshlet_and_vertex_descriptor_layout_info, None)
+                .create_descriptor_set_layout(&tilda_hs_descriptor_layout_info, None)
                 .unwrap()
         };
 
-        let set_layouts = [meshlet_and_vertex_descriptor_layout];
-        let meshlet_and_vertex_descriptor_allocate_info = vk::DescriptorSetAllocateInfo::builder()
+        let set_layouts = [tilda_hs_descriptor_layout];
+        let tilda_hs_descriptor_allocate_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
             .set_layouts(&set_layouts);
-        let meshlet_and_vertex_descriptor_set = unsafe {
+        let tilda_hs_descriptor_set = unsafe {
             device
-                .allocate_descriptor_sets(&meshlet_and_vertex_descriptor_allocate_info)
+                .allocate_descriptor_sets(&tilda_hs_descriptor_allocate_info)
                 .unwrap()[0]
         };
 
-        let meshlet_buffer_size = (size_of::<Meshlet>() * meshlets.len()) as u64;
-        let (meshlet_buffer, meshlet_buffer_memory) = vk_initializers::create_buffer(
+        let tilda_h_size = (size_of::<Complex>() * tilde_h_zero.len()) as u64;
+        let (temp_buffer, temp_buffer_memory) = vk_initializers::create_buffer(
             &instance,
             physical_device,
             &device,
-            meshlet_buffer_size,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
+            tilda_h_size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         );
 
         unsafe {
             let data_ptr = device
                 .map_memory(
-                    meshlet_buffer_memory,
+                    temp_buffer_memory,
                     0,
-                    meshlet_buffer_size,
+                    tilda_h_size,
                     vk::MemoryMapFlags::empty(),
                 )
-                .unwrap() as *mut Meshlet;
-            data_ptr.copy_from_nonoverlapping(meshlets.as_ptr(), meshlets.len());
-            device.unmap_memory(meshlet_buffer_memory);
+                .unwrap() as *mut Complex;
+            data_ptr.copy_from_nonoverlapping(tilde_h_zero.as_ptr(), tilde_h_zero.len());
+            device.unmap_memory(temp_buffer_memory);
         }
 
-        let meshlet_buffer_info = vk::DescriptorBufferInfo::builder()
-            .buffer(meshlet_buffer)
+        let (tilda_h_buffer, tilda_h_buffer_memory) = vk_initializers::create_buffer(
+            &instance,
+            physical_device,
+            &device,
+            tilda_h_size,
+            vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::STORAGE_BUFFER,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        );
+
+        vk_initializers::copy_buffer(
+            &device,
+            frame_data[0].command_pool,
+            graphics_queue,
+            temp_buffer,
+            tilda_h_buffer,
+            tilda_h_size,
+        );
+
+        unsafe {
+            vk_initializers::free_buffer_and_memory(&device, temp_buffer, temp_buffer_memory)
+        };
+
+        let tilda_h_buffer_info = vk::DescriptorBufferInfo::builder()
+            .buffer(tilda_h_buffer)
             .offset(0)
-            .range(meshlet_buffer_size)
+            .range(tilda_h_size)
             .build();
-        let meshlet_buffer_infos = [meshlet_buffer_info];
-        let meshlet_set_write = vk::WriteDescriptorSet::builder()
-            .dst_set(meshlet_and_vertex_descriptor_set)
+        let tilda_h_buffer_infos = [tilda_h_buffer_info];
+        let tilda_h_set_write = vk::WriteDescriptorSet::builder()
+            .dst_set(tilda_hs_descriptor_set)
             .dst_binding(0)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&meshlet_buffer_infos)
+            .buffer_info(&tilda_h_buffer_infos)
             .build();
 
-        let vertex_buffer_size = (size_of::<Vertex>() * vertices.len()) as u64;
-        let (vertex_buffer, vertex_buffer_memory) = vk_initializers::create_buffer(
+        let tilda_h_conjugate_size = (size_of::<Complex>() * tilde_h_conjugate_zero.len()) as u64;
+        let (temp_buffer, temp_buffer_memory) = vk_initializers::create_buffer(
             &instance,
             physical_device,
             &device,
-            vertex_buffer_size,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
+            tilda_h_conjugate_size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         );
 
         unsafe {
             let data_ptr = device
                 .map_memory(
-                    vertex_buffer_memory,
+                    temp_buffer_memory,
                     0,
-                    vertex_buffer_size,
+                    tilda_h_conjugate_size,
                     vk::MemoryMapFlags::empty(),
                 )
-                .unwrap() as *mut Vertex;
-            data_ptr.copy_from_nonoverlapping(vertices.as_ptr(), vertices.len());
-            device.unmap_memory(vertex_buffer_memory);
+                .unwrap() as *mut Complex;
+            data_ptr.copy_from_nonoverlapping(
+                tilde_h_conjugate_zero.as_ptr(),
+                tilde_h_conjugate_zero.len(),
+            );
+            device.unmap_memory(temp_buffer_memory);
         }
 
-        let vertex_buffer_info = vk::DescriptorBufferInfo::builder()
-            .buffer(vertex_buffer)
+        let (tilda_h_conjugate_buffer, tilda_h_conjugate_buffer_memory) =
+            vk_initializers::create_buffer(
+                &instance,
+                physical_device,
+                &device,
+                tilda_h_conjugate_size,
+                vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::STORAGE_BUFFER,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            );
+
+        vk_initializers::copy_buffer(
+            &device,
+            frame_data[0].command_pool,
+            graphics_queue,
+            temp_buffer,
+            tilda_h_conjugate_buffer,
+            tilda_h_conjugate_size,
+        );
+
+        unsafe {
+            vk_initializers::free_buffer_and_memory(&device, temp_buffer, temp_buffer_memory)
+        };
+
+        let tilda_h_conjugate_buffer_info = vk::DescriptorBufferInfo::builder()
+            .buffer(tilda_h_conjugate_buffer)
             .offset(0)
-            .range(vertex_buffer_size)
+            .range(tilda_h_conjugate_size)
             .build();
-        let vertex_buffer_infos = [vertex_buffer_info];
-        let vertex_set_write = vk::WriteDescriptorSet::builder()
-            .dst_set(meshlet_and_vertex_descriptor_set)
+        let tilda_h_conjugate_buffer_infos = [tilda_h_conjugate_buffer_info];
+        let tilda_h_conjugate_set_write = vk::WriteDescriptorSet::builder()
+            .dst_set(tilda_hs_descriptor_set)
             .dst_binding(1)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&vertex_buffer_infos)
+            .buffer_info(&tilda_h_conjugate_buffer_infos)
             .build();
 
-        unsafe { device.update_descriptor_sets(&[meshlet_set_write, vertex_set_write], &[]) };
+        let tilda_h_t_size = (size_of::<Complex>() * tilde_h_zero.len()) as u64;
+        let (tilda_h_t_buffer, tilda_h_t_buffer_memory) = vk_initializers::create_buffer(
+            &instance,
+            physical_device,
+            &device,
+            tilda_h_t_size,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        );
+
+        let tilda_h_t_buffer_info = vk::DescriptorBufferInfo::builder()
+            .buffer(tilda_h_t_buffer)
+            .offset(0)
+            .range(tilda_h_t_size)
+            .build();
+        let tilda_h_t_buffer_infos = [tilda_h_t_buffer_info];
+        let tilda_h_t_set_write = vk::WriteDescriptorSet::builder()
+            .dst_set(tilda_hs_descriptor_set)
+            .dst_binding(2)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(&tilda_h_t_buffer_infos)
+            .build();
+
+        unsafe {
+            device.update_descriptor_sets(
+                &[
+                    tilda_h_set_write,
+                    tilda_h_conjugate_set_write,
+                    tilda_h_t_set_write,
+                ],
+                &[],
+            )
+        };
 
         let triangle_pipeline_layout = unsafe {
             device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::builder()
-                        .set_layouts(&[global_set_layout, meshlet_and_vertex_descriptor_layout]),
+                        .set_layouts(&[global_set_layout, tilda_hs_descriptor_layout]),
                     None,
                 )
                 .unwrap()
         };
 
         let triangle_mesh_shader_module =
-            vk_initializers::create_shader_module(&device, "./shaders/triangle.mesh.spv");
+            vk_initializers::create_shader_module(&device, "./shaders/ocean.mesh.spv");
         let triangle_fragment_shader_module =
-            vk_initializers::create_shader_module(&device, "./shaders/triangle.frag.spv");
+            vk_initializers::create_shader_module(&device, "./shaders/ocean.frag.spv");
 
         let mut pipeline_builder = VkPipelineBuilder::default();
 
@@ -614,7 +799,7 @@ impl VkEngine {
             .build();
 
         pipeline_builder.rasterizer =
-            vk_initializers::rasterization_state_create_info(vk::PolygonMode::FILL);
+            vk_initializers::rasterization_state_create_info(vk::PolygonMode::LINE);
 
         pipeline_builder.multisampling = vk_initializers::multisampling_state_create_info();
 
@@ -625,6 +810,48 @@ impl VkEngine {
         pipeline_builder.pipeline_layout = triangle_pipeline_layout;
 
         let triangle_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
+
+        let frequency_shader_module =
+            vk_initializers::create_shader_module(&device, "./shaders/frequency.comp.spv");
+        let row_ift_shader_module =
+            vk_initializers::create_shader_module(&device, "./shaders/row_ift.comp.spv");
+        let col_ift_shader_module =
+            vk_initializers::create_shader_module(&device, "./shaders/col_ift.comp.spv");
+
+        let frequency_pipline_create_info = vk::ComputePipelineCreateInfo::builder()
+            .stage(vk_initializers::pipeline_shader_stage_create_info(
+                vk::ShaderStageFlags::COMPUTE,
+                frequency_shader_module,
+                "cs_main\0",
+            ))
+            .layout(triangle_pipeline_layout)
+            .build();
+        let row_ift_pipline_create_info = vk::ComputePipelineCreateInfo::builder()
+            .stage(vk_initializers::pipeline_shader_stage_create_info(
+                vk::ShaderStageFlags::COMPUTE,
+                row_ift_shader_module,
+                "cs_main\0",
+            ))
+            .layout(triangle_pipeline_layout)
+            .build();
+        let col_ift_pipline_create_info = vk::ComputePipelineCreateInfo::builder()
+            .stage(vk_initializers::pipeline_shader_stage_create_info(
+                vk::ShaderStageFlags::COMPUTE,
+                col_ift_shader_module,
+                "cs_main\0",
+            ))
+            .layout(triangle_pipeline_layout)
+            .build();
+        let compute_teezak = [
+            frequency_pipline_create_info,
+            row_ift_pipline_create_info,
+            col_ift_pipline_create_info,
+        ];
+        let compute_pipelines = unsafe {
+            device
+                .create_compute_pipelines(vk::PipelineCache::null(), &compute_teezak, None)
+                .unwrap()
+        };
 
         let camera = Camera::default();
 
@@ -638,61 +865,6 @@ impl VkEngine {
         );
 
         let mesh_shader = MeshShader::new(&instance, &device);
-
-        let mut tilde_h_zero: Vec<Complex> =
-            vec![unsafe { std::mem::zeroed() }; OCEAN_PATCH_DIM * OCEAN_PATCH_DIM];
-        let mut tilde_h_conjugate_zero: Vec<Complex> =
-            vec![unsafe { std::mem::zeroed() }; OCEAN_PATCH_DIM * OCEAN_PATCH_DIM];
-
-        let amplitude = 20.0;
-        let wind_speed = 26.0;
-        let wind_direction = Vec2 { x: 1.0, y: 0.0 };
-        let g = 9.81;
-        let L = wind_speed * wind_speed / g;
-
-        let mut rnd_state = 1;
-
-        for i in 0..OCEAN_PATCH_DIM {
-            for j in 0..OCEAN_PATCH_DIM {
-                let k = Vec2 {
-                    x: i as f32,
-                    y: j as f32,
-                };
-                let k_length_sqr = k.length_sqr();
-
-                let b = f32::exp(-1.0 / (k_length_sqr * L * L)) / (k_length_sqr * k_length_sqr);
-                let c = f32::powi(Vec2::dot(k.normal(), wind_direction), 2);
-
-                let phillips_k = amplitude * b * c;
-
-                let k = Vec2 {
-                    x: -(i as f32),
-                    y: -(j as f32),
-                };
-
-                let c = f32::powi(Vec2::dot(k.normal(), wind_direction), 2);
-
-                let phillips_minus_k = amplitude * b * c;
-
-                let h_zero_k = f32::sqrt(phillips_k) * (1.0 / std::f32::consts::SQRT_2);
-                let h_zero_minus_k = f32::sqrt(phillips_minus_k) * (1.0 / std::f32::consts::SQRT_2);
-
-                let (u1, u2) = (xorshift32(&mut rnd_state), xorshift32(&mut rnd_state));
-                let (z1, z2) =
-                    box_muller_rng(u1 as f32 / u32::MAX as f32, u2 as f32 / u32::MAX as f32);
-
-                tilde_h_zero[i * OCEAN_PATCH_DIM + j] = Complex { real: z1, imag: z2 } * h_zero_k;
-
-                let (u1, u2) = (xorshift32(&mut rnd_state), xorshift32(&mut rnd_state));
-                let (z1, z2) =
-                    box_muller_rng(u1 as f32 / u32::MAX as f32, u2 as f32 / u32::MAX as f32);
-
-                tilde_h_conjugate_zero[i * OCEAN_PATCH_DIM + j] = Complex {
-                    real: z1,
-                    imag: -z2,
-                } * h_zero_minus_k;
-            }
-        }
 
         return VkEngine {
             sdl_context,
@@ -729,21 +901,23 @@ impl VkEngine {
             camera,
             last_timestamp: std::time::Instant::now(),
             mesh_shader_data: MeshShaderData {
-                descriptor_set_layout: meshlet_and_vertex_descriptor_layout,
-                descriptor_set: meshlet_and_vertex_descriptor_set,
+                descriptor_set_layout: tilda_hs_descriptor_layout,
+                descriptor_set: tilda_hs_descriptor_set,
                 buffers: [
                     VkBuffer {
-                        buffer: meshlet_buffer,
-                        buffer_memory: meshlet_buffer_memory,
+                        buffer: tilda_h_buffer,
+                        buffer_memory: tilda_h_buffer_memory,
                     },
                     VkBuffer {
-                        buffer: vertex_buffer,
-                        buffer_memory: vertex_buffer_memory,
+                        buffer: tilda_h_conjugate_buffer,
+                        buffer_memory: tilda_h_conjugate_buffer_memory,
                     },
                 ],
-                meshlet_count: meshlets.len() as u32,
+                meshlet_count: 1,
             },
             mesh_shader,
+            compute_pipelines,
+            start: std::time::Instant::now(),
         };
     }
 
@@ -949,6 +1123,140 @@ impl VkEngine {
             .begin_command_buffer(frame_data.command_buffer, &command_buffer_begin_info)
             .unwrap();
 
+        let frame = self.frame_count as f32 / 120.0f32;
+        let view = Mat4::look_at_rh(
+            self.camera.pos,
+            self.camera.pos + self.camera.front,
+            self.camera.up,
+        );
+        let projection = Mat4::prespective(
+            self.camera.fov,
+            self.size.width as f32 / self.size.height as f32,
+            0.1,
+            1000.0,
+        );
+        let mut scene_data: SceneData = std::mem::zeroed();
+        scene_data.view = view;
+        scene_data.projection = projection;
+        scene_data.ambient_color = Vec4 {
+            x: frame.sin(),
+            y: 0.0,
+            z: frame.cos(),
+            w: 1.0,
+        };
+        scene_data.fog_distances.z = std::time::Instant::now()
+            .duration_since(self.start)
+            .as_millis() as f32
+            / 1000.0;
+
+        let scene_data_offset =
+            (Self::return_aligned_size(self.physical_device_properties, size_of::<SceneData>())
+                * frame_index) as u64;
+        let scene_data_ptr = self
+            .device
+            .map_memory(
+                self.scene_data_buffer.buffer_memory,
+                scene_data_offset,
+                size_of::<SceneData>() as u64,
+                vk::MemoryMapFlags::empty(),
+            )
+            .unwrap() as *mut SceneData;
+        scene_data_ptr.copy_from_nonoverlapping([scene_data].as_ptr(), 1);
+        self.device
+            .unmap_memory(self.scene_data_buffer.buffer_memory);
+
+        self.device.cmd_bind_pipeline(
+            frame_data.command_buffer,
+            vk::PipelineBindPoint::COMPUTE,
+            self.compute_pipelines[0],
+        );
+        self.device.cmd_bind_descriptor_sets(
+            frame_data.command_buffer,
+            vk::PipelineBindPoint::COMPUTE,
+            self.materials["default"].pipeline_layout,
+            0,
+            &[
+                self.global_descriptor_set,
+                self.mesh_shader_data.descriptor_set,
+            ],
+            &[scene_data_offset as u32],
+        );
+        self.device.cmd_dispatch(
+            frame_data.command_buffer,
+            OCEAN_PATCH_DIM as u32 / 16,
+            OCEAN_PATCH_DIM as u32 / 16,
+            1,
+        );
+
+        let memory_barrier = vk::MemoryBarrier::builder()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ)
+            .build();
+        let memory_barriers = [memory_barrier];
+        self.device.cmd_pipeline_barrier(
+            frame_data.command_buffer,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::DependencyFlags::DEVICE_GROUP,
+            &memory_barriers,
+            &[],
+            &[],
+        );
+
+        self.device.cmd_bind_pipeline(
+            frame_data.command_buffer,
+            vk::PipelineBindPoint::COMPUTE,
+            self.compute_pipelines[1],
+        );
+        self.device.cmd_dispatch(
+            frame_data.command_buffer,
+            OCEAN_PATCH_DIM as u32 / 64,
+            OCEAN_PATCH_DIM as u32,
+            1,
+        );
+
+        let memory_barrier = vk::MemoryBarrier::builder()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ)
+            .build();
+        let memory_barriers = [memory_barrier];
+        self.device.cmd_pipeline_barrier(
+            frame_data.command_buffer,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::DependencyFlags::DEVICE_GROUP,
+            &memory_barriers,
+            &[],
+            &[],
+        );
+
+        self.device.cmd_bind_pipeline(
+            frame_data.command_buffer,
+            vk::PipelineBindPoint::COMPUTE,
+            self.compute_pipelines[2],
+        );
+        self.device.cmd_dispatch(
+            frame_data.command_buffer,
+            OCEAN_PATCH_DIM as u32,
+            OCEAN_PATCH_DIM as u32 / 64,
+            1,
+        );
+
+        let memory_barrier = vk::MemoryBarrier::builder()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ)
+            .build();
+        let memory_barriers = [memory_barrier];
+        self.device.cmd_pipeline_barrier(
+            frame_data.command_buffer,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::MESH_SHADER_NV,
+            vk::DependencyFlags::DEVICE_GROUP,
+            &memory_barriers,
+            &[],
+            &[],
+        );
+
         let mut clear_value = vk::ClearValue::default();
         clear_value.color = vk::ClearColorValue {
             float32: [
@@ -977,54 +1285,12 @@ impl VkEngine {
             vk::SubpassContents::INLINE,
         );
 
-        let frame = self.frame_count as f32 / 120.0f32;
-        let view = Mat4::look_at_rh(
-            self.camera.pos,
-            self.camera.pos + self.camera.front,
-            self.camera.up,
-        );
-        let projection = Mat4::prespective(
-            self.camera.fov,
-            self.size.width as f32 / self.size.height as f32,
-            0.1,
-            100.0,
-        );
-        let mut scene_data: SceneData = std::mem::zeroed();
-        scene_data.view = view;
-        scene_data.projection = projection;
-        scene_data.ambient_color = Vec4 {
-            x: frame.sin(),
-            y: 0.0,
-            z: frame.cos(),
-            w: 1.0,
-        };
-
-        let scene_data_offset =
-            (Self::return_aligned_size(self.physical_device_properties, size_of::<SceneData>())
-                * frame_index) as u64;
-        let scene_data_ptr = self
-            .device
-            .map_memory(
-                self.scene_data_buffer.buffer_memory,
-                scene_data_offset,
-                size_of::<SceneData>() as u64,
-                vk::MemoryMapFlags::empty(),
-            )
-            .unwrap() as *mut SceneData;
-        scene_data_ptr.copy_from_nonoverlapping([scene_data].as_ptr(), 1);
-        self.device
-            .unmap_memory(self.scene_data_buffer.buffer_memory);
-
         self.device.cmd_bind_pipeline(
             frame_data.command_buffer,
             vk::PipelineBindPoint::GRAPHICS,
             self.materials["default"].pipeline,
         );
 
-        let scene_data_offset = Self::return_aligned_size(
-            self.physical_device_properties,
-            size_of::<SceneData>() * frame_index,
-        ) as u32;
         self.device.cmd_bind_descriptor_sets(
             frame_data.command_buffer,
             vk::PipelineBindPoint::GRAPHICS,
@@ -1034,12 +1300,12 @@ impl VkEngine {
                 self.global_descriptor_set,
                 self.mesh_shader_data.descriptor_set,
             ],
-            &[scene_data_offset],
+            &[scene_data_offset as u32],
         );
 
         self.mesh_shader.cmd_draw_mesh_tasks(
             frame_data.command_buffer,
-            self.mesh_shader_data.meshlet_count,
+            (OCEAN_PATCH_DIM * OCEAN_PATCH_DIM) as u32 / (16 * 16),
             0,
         );
 
@@ -1115,7 +1381,7 @@ impl VkEngine {
                         keycode: Some(pressed_key),
                         ..
                     } => {
-                        let camera_speed = 2.5 * delta_time;
+                        let camera_speed = 25.0 * delta_time;
                         if pressed_key == Keycode::W {
                             self.camera.pos += self.camera.front * camera_speed;
                         }
