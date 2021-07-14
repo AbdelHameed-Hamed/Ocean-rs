@@ -5,7 +5,6 @@ extern crate sdl2;
 use crate::math::fft::Complex;
 use crate::math::lin_alg::{Mat4, Vec2, Vec3, Vec4};
 use crate::math::rand::{box_muller_rng, xorshift32};
-use crate::obj_loader::read_obj_file;
 use crate::vk_initializers;
 
 use ash::extensions::{
@@ -13,12 +12,11 @@ use ash::extensions::{
     khr::{Surface, Swapchain},
     nv::MeshShader,
 };
-use ash::version::{DeviceV1_0, InstanceV1_0, InstanceV1_1};
+use ash::version::{DeviceV1_0, InstanceV1_0};
 use ash::{vk, Device, Instance};
-use image::{GenericImage, GenericImageView, ImageBuffer, RgbImage};
+use image::{ImageBuffer, RgbImage};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
-use sdl2::sys::M_PI;
 use sdl2::video::Window;
 use std::collections::HashMap;
 use std::mem::size_of;
@@ -56,7 +54,7 @@ struct Mesh {
 struct MeshShaderData {
     descriptor_set_layout: vk::DescriptorSetLayout,
     descriptor_set: vk::DescriptorSet,
-    buffers: [VkBuffer; 2],
+    buffers: [VkBuffer; 3],
     meshlet_count: u32,
 }
 
@@ -259,17 +257,6 @@ impl VkEngine {
 
         let physical_device_properties =
             unsafe { instance.get_physical_device_properties(physical_device) };
-
-        let mut AAAAAAAAAAAAA = vk::PhysicalDeviceMeshShaderPropertiesNV {
-            ..Default::default()
-        };
-        let temp = unsafe {
-            let mut prop = vk::PhysicalDeviceProperties2::builder().push_next(&mut AAAAAAAAAAAAA);
-            instance.get_physical_device_properties2(physical_device, &mut prop);
-            prop
-        };
-
-        println!("{}", temp.properties.api_version);
 
         let device =
             vk_initializers::create_device(queue_family_index, &instance, &physical_device);
@@ -485,8 +472,6 @@ impl VkEngine {
         let mut tilde_h_img: RgbImage =
             ImageBuffer::new(OCEAN_PATCH_DIM as u32, OCEAN_PATCH_DIM as u32);
 
-        let mut counter = 0;
-
         for i in 0..OCEAN_PATCH_DIM {
             for j in 0..OCEAN_PATCH_DIM {
                 let k = Vec2 {
@@ -545,8 +530,6 @@ impl VkEngine {
                 } * h_zero_minus_k;
             }
         }
-
-        println!("{}", counter);
 
         tilde_h_img.save("./tilde_h_img.png").unwrap();
 
@@ -853,6 +836,12 @@ impl VkEngine {
                 .unwrap()
         };
 
+        unsafe {
+            device.destroy_shader_module(frequency_shader_module, None);
+            device.destroy_shader_module(row_ift_shader_module, None);
+            device.destroy_shader_module(col_ift_shader_module, None);
+        };
+
         let camera = Camera::default();
 
         let mut material_map = HashMap::<String, Material>::new();
@@ -911,6 +900,10 @@ impl VkEngine {
                     VkBuffer {
                         buffer: tilda_h_conjugate_buffer,
                         buffer_memory: tilda_h_conjugate_buffer_memory,
+                    },
+                    VkBuffer {
+                        buffer: tilda_h_t_buffer,
+                        buffer_memory: tilda_h_t_buffer_memory,
                     },
                 ],
                 meshlet_count: 1,
@@ -1059,6 +1052,10 @@ impl VkEngine {
         }
         for &framebuffer in self.framebuffers.iter() {
             self.device.destroy_framebuffer(framebuffer, None);
+        }
+
+        for compute_pipeline in self.compute_pipelines.iter() {
+            self.device.destroy_pipeline(*compute_pipeline, None);
         }
 
         for (_, material) in self.materials.iter() {
