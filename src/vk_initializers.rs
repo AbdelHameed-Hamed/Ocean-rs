@@ -395,6 +395,7 @@ pub fn create_framebuffers(
 pub fn create_command_pool_and_buffer(
     queue_family_index: u32,
     device: &Device,
+    command_buffer_count: u32,
 ) -> (vk::CommandPool, Vec<vk::CommandBuffer>) {
     let command_pool_create_info = vk::CommandPoolCreateInfo::builder()
         .queue_family_index(queue_family_index)
@@ -407,15 +408,15 @@ pub fn create_command_pool_and_buffer(
 
     let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::builder()
         .command_pool(command_pool)
-        .command_buffer_count(1)
+        .command_buffer_count(command_buffer_count)
         .level(vk::CommandBufferLevel::PRIMARY);
-    let command_buffer = unsafe {
+    let command_buffers = unsafe {
         device
             .allocate_command_buffers(&command_buffer_allocate_info)
             .unwrap()
     };
 
-    return (command_pool, command_buffer);
+    return (command_pool, command_buffers);
 }
 
 pub fn create_shader_module(device: &Device, filepath: &str) -> vk::ShaderModule {

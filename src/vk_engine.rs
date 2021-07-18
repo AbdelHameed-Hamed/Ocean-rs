@@ -87,7 +87,6 @@ struct FrameData {
     present_semaphore: vk::Semaphore,
     render_semaphore: vk::Semaphore,
     render_fence: vk::Fence,
-    command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
     object_buffer: VkBuffer,
     object_descriptor: vk::DescriptorSet,
@@ -223,6 +222,7 @@ pub struct VkEngine {
     global_descriptor_set: vk::DescriptorSet,
     object_set_layout: vk::DescriptorSetLayout,
     descriptor_pool: vk::DescriptorPool,
+    command_pool: vk::CommandPool,
     frame_data: [FrameData; FRAME_OVERLAP],
     scene_data_buffer: VkBuffer,
     triangle_vertex_shader_module: vk::ShaderModule,
@@ -421,6 +421,11 @@ impl VkEngine {
 
         unsafe { device.update_descriptor_sets(&[scene_set_write], &[]) };
 
+        let (command_pool, command_buffers) = vk_initializers::create_command_pool_and_buffer(
+            queue_family_index,
+            &device,
+            FRAME_OVERLAP as u32,
+        );
         let mut frame_data: [FrameData; FRAME_OVERLAP] = unsafe { std::mem::zeroed() };
         for i in 0..FRAME_OVERLAP {
             let semaphore_create_info = vk::SemaphoreCreateInfo::default();
@@ -439,15 +444,11 @@ impl VkEngine {
                 vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
             let render_fence = unsafe { device.create_fence(&fence_create_info, None).unwrap() };
 
-            let (command_pool, command_buffers) =
-                vk_initializers::create_command_pool_and_buffer(queue_family_index, &device);
-
             frame_data[i] = FrameData {
                 present_semaphore,
                 render_semaphore,
                 render_fence,
-                command_pool,
-                command_buffer: command_buffers[0],
+                command_buffer: command_buffers[i],
                 object_buffer: VkBuffer {
                     buffer: unsafe { std::mem::zeroed() },
                     buffer_memory: unsafe { std::mem::zeroed() },
@@ -609,7 +610,7 @@ impl VkEngine {
 
         vk_initializers::copy_buffer(
             &device,
-            frame_data[0].command_pool,
+            command_pool,
             graphics_queue,
             temp_buffer,
             tilda_h_buffer,
@@ -671,7 +672,7 @@ impl VkEngine {
 
         vk_initializers::copy_buffer(
             &device,
-            frame_data[0].command_pool,
+            command_pool,
             graphics_queue,
             temp_buffer,
             tilda_h_conjugate_buffer,
@@ -879,6 +880,7 @@ impl VkEngine {
             global_descriptor_set,
             object_set_layout,
             descriptor_pool,
+            command_pool,
             frame_data,
             scene_data_buffer: VkBuffer {
                 buffer: scene_param_buffer,
@@ -961,15 +963,14 @@ impl VkEngine {
             );
         }
 
+        self.device.destroy_command_pool(self.command_pool, None);
+
         for frame_data in self.frame_data.iter() {
             self.device
                 .destroy_semaphore(frame_data.present_semaphore, None);
             self.device
                 .destroy_semaphore(frame_data.render_semaphore, None);
             self.device.destroy_fence(frame_data.render_fence, None);
-
-            self.device
-                .destroy_command_pool(frame_data.command_pool, None);
 
             vk_initializers::free_buffer_and_memory(
                 &self.device,
