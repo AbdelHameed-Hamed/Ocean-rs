@@ -26,8 +26,11 @@ struct OutputVertex {
     float4 pos: SV_Position;
 };
 
-// Here we wanna generate a 12x12 ocean patch and figure out where its triangles and verts are gonna lie
-// in world space, this'll generate 144 vertices and 242 triangles.
+// Here we wanna generate a 16x16 ocean patch and figure out where its triangles and verts are gonna lie
+// in world space, this'll generate 256 vertices and 450 triangles.
+// Note: There's gonna be a bit of an overlap, this is necessary to ensure that the topology of the edge
+// triangles is accounted for, i.e., without this overlap you'd have individual disconnected patches
+// instead of one mega connected patch.
 #define patch_dim 16
 #define patch_vertex_count (patch_dim * patch_dim)
 #define patch_triangle_count ((patch_dim - 1) * (patch_dim - 1) * 2)
@@ -44,6 +47,9 @@ void ms_main(
 {
     SetMeshOutputCounts(patch_vertex_count, patch_triangle_count);
 
+    uint group_idx_x = group_id % (ocean_dim / patch_dim);
+    uint group_idx_z = group_id / (ocean_dim / patch_dim);
+
     // We start off by figuring where our vertices and triangles are, transform and register them.
     uint num_iterations = ceil(patch_vertex_count / 32.0);
     for (uint i = 0; i < num_iterations; ++i) {
@@ -52,8 +58,12 @@ void ms_main(
             uint x = vert_idx % patch_dim;
             uint z = vert_idx / patch_dim;
 
-            uint global_x = (group_id % (ocean_dim / patch_dim)) * patch_dim + x + 1;
-            uint global_z = (group_id / (ocean_dim / patch_dim)) * patch_dim + z + 1;
+            uint global_x = group_idx_x * patch_dim + x + 1;
+            if (group_idx_x != 0)
+                global_x -= group_idx_x;
+            uint global_z = group_idx_z * patch_dim + z + 1;
+            if (group_idx_z != 0)
+                global_z -= group_idx_z;
             uint global_idx = (global_z - 1) * ocean_dim + (global_x - 1);
 
             // Transform the vertex and register it

@@ -17,7 +17,7 @@ pub fn create_sdl_window(width: u32, height: u32) -> (sdl2::Sdl, sdl2::video::Wi
     let video_subsystem = sdl_context.video().unwrap();
 
     let window = video_subsystem
-        .window("Rust Vulkan Renderer", width, height)
+        .window("Ocean", width, height)
         .vulkan()
         .build()
         .unwrap();
