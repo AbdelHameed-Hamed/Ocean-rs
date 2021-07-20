@@ -58,12 +58,8 @@ void ms_main(
             uint x = vert_idx % patch_dim;
             uint z = vert_idx / patch_dim;
 
-            uint global_x = group_idx_x * patch_dim + x + 1;
-            if (group_idx_x != 0)
-                global_x -= group_idx_x;
-            uint global_z = group_idx_z * patch_dim + z + 1;
-            if (group_idx_z != 0)
-                global_z -= group_idx_z;
+            uint global_x = group_idx_x * patch_dim + x + 1 - group_idx_x;
+            uint global_z = group_idx_z * patch_dim + z + 1 - group_idx_z;
             uint global_idx = (global_z - 1) * ocean_dim + (global_x - 1);
 
             // Transform the vertex and register it
