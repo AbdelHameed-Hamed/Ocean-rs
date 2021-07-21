@@ -1,5 +1,4 @@
 extern crate ash;
-extern crate image;
 extern crate sdl2;
 
 use crate::math::fft::Complex;
@@ -12,9 +11,8 @@ use ash::extensions::{
     khr::{Surface, Swapchain},
     nv::MeshShader,
 };
-use ash::version::{DeviceV1_0, InstanceV1_0};
+use ash::version::{DeviceV1_0, InstanceV1_0, InstanceV1_1};
 use ash::{vk, Device, Instance};
-use image::{ImageBuffer, RgbImage};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::video::Window;
@@ -470,9 +468,6 @@ impl VkEngine {
 
         let mut rnd_state = 1;
 
-        let mut tilde_h_img: RgbImage =
-            ImageBuffer::new(OCEAN_PATCH_DIM as u32, OCEAN_PATCH_DIM as u32);
-
         for i in 0..OCEAN_PATCH_DIM {
             for j in 0..OCEAN_PATCH_DIM {
                 let k = Vec2 {
@@ -509,18 +504,6 @@ impl VkEngine {
                 let temp = Complex { real: z1, imag: z2 } * h_zero_k;
                 tilde_h_zero[i * OCEAN_PATCH_DIM + j] = temp;
 
-                tilde_h_img.put_pixel(
-                    i as u32,
-                    j as u32,
-                    image::Rgb {
-                        0: [
-                            f32::clamp(temp.real * 255.0, 0.0, 255.0) as u8,
-                            f32::clamp(temp.imag * 255.0, 0.0, 255.0) as u8,
-                            0,
-                        ],
-                    },
-                );
-
                 let (u1, u2) = (xorshift32(&mut rnd_state), xorshift32(&mut rnd_state));
                 let (z1, z2) =
                     box_muller_rng(u1 as f32 / u32::MAX as f32, u2 as f32 / u32::MAX as f32);
@@ -531,8 +514,6 @@ impl VkEngine {
                 } * h_zero_minus_k;
             }
         }
-
-        tilde_h_img.save("./tilde_h_img.png").unwrap();
 
         let tilda_h_binding = vk_initializers::descriptor_set_layout_binding(
             vk::DescriptorType::STORAGE_BUFFER,
