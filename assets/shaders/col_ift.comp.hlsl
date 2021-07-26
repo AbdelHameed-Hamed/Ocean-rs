@@ -20,6 +20,8 @@ StructuredBuffer<Complex> input: register(t1, space1);
 RWStructuredBuffer<Complex> output: register(u2, space1);
 
 #define ocean_dim 512
+#define l_x 1000.0f
+#define l_z 1000.0f
 #define num_threads 64
 
 [numthreads(1, num_threads, 1)]
@@ -34,7 +36,7 @@ void cs_main(in uint3 thread_id: SV_DispatchThreadID) {
             output[output_idx],
             complex_mul(
                 input[input_idx],
-                complex_exp(2 * PI * (j * 2.0 * PI / ocean_dim) * (k * 2.0 * PI / ocean_dim))
+                complex_exp(2 * PI * (j * 2.0 * PI / l_x) * (k * 2.0 * PI / l_z))
             )
         );
     }

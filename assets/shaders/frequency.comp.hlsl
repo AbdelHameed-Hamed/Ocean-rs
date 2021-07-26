@@ -15,6 +15,8 @@ StructuredBuffer<Complex> tilde_h_zero_conjugate: register(t1, space1);
 RWStructuredBuffer<Complex> tilde_h_t: register(u2, space1);
 
 #define ocean_dim 512
+#define l_x 1000.0f
+#define l_z 1000.0f
 #define width 16
 #define height 16
 
@@ -25,7 +27,7 @@ void cs_main(in uint3 thread_id: SV_DispatchThreadID) {
         // printf("Time is: %f\n", fog_distances.z);
     }
 
-    float2 k = uint2(thread_id.x * 2.0 * PI / ocean_dim, thread_id.y * 2.0 * PI / ocean_dim);
+    float2 k = uint2(thread_id.x * 2.0 * PI / l_x, thread_id.y * 2.0 * PI / l_z);
     float w_k_t = sqrt(9.81 * length(k)) * fog_distances.z;
 
     // For now I'm hardcoding the actual ocean patch width
