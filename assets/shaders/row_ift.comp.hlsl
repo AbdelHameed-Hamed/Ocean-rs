@@ -32,11 +32,12 @@ void cs_main(in uint3 thread_id: SV_DispatchThreadID) {
     uint k = thread_id.x;
     for (uint j = 0; j < ocean_dim; ++j) {
         uint input_idx = thread_id.y * ocean_dim + j;
+        float2 l = fog_distances.xy;
         output[output_idx] = complex_add(
             output[output_idx],
             complex_mul(
                 input[input_idx],
-                complex_exp(2 * PI * (j * 2.0 * PI / l_x) * (k * 2.0 * PI / l_z))
+                complex_exp(2 * PI * (j * 2.0 * PI / l.x) * (k * 2.0 * PI / l.y))
             )
         );
     }

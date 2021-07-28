@@ -80,6 +80,8 @@ struct SceneData {
 const FRAME_OVERLAP: usize = 2;
 const MAX_OBJECTS: usize = 10_000;
 const OCEAN_PATCH_DIM: usize = 512;
+const L_X: f32 = 1000.0f32;
+const L_Y: f32 = 1000.0f32;
 
 struct FrameData {
     present_semaphore: vk::Semaphore,
@@ -1046,12 +1048,8 @@ impl VkEngine {
         let mut scene_data: SceneData = std::mem::zeroed();
         scene_data.view = view;
         scene_data.projection = projection;
-        scene_data.ambient_color = Vec4 {
-            x: frame.sin(),
-            y: 0.0,
-            z: frame.cos(),
-            w: 1.0,
-        };
+        scene_data.fog_distances.x = L_X;
+        scene_data.fog_distances.y = L_Y;
         scene_data.fog_distances.z = std::time::Instant::now()
             .duration_since(self.start)
             .as_millis() as f32
