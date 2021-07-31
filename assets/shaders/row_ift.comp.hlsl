@@ -20,8 +20,6 @@ RWStructuredBuffer<Complex> output: register(u1, space1);
 StructuredBuffer<Complex> input: register(t2, space1);
 
 #define ocean_dim 512
-#define l_x 1000.0f
-#define l_z 1000.0f
 #define num_threads 64
 
 [numthreads(num_threads, 1, 1)]
@@ -30,6 +28,7 @@ void cs_main(in uint3 thread_id: SV_DispatchThreadID) {
     Complex temp = { 0, 0 };
     output[output_idx] = temp;
     uint k = thread_id.x;
+    // Naive DFT with complexity O(n^2)
     for (uint j = 0; j < ocean_dim; ++j) {
         uint input_idx = thread_id.y * ocean_dim + j;
         float2 l = fog_distances.xy;
