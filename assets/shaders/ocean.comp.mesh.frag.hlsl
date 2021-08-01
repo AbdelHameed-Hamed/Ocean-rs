@@ -3,10 +3,6 @@
 #define OCEAN_DIM 512
 #define OCEAN_DIM_EXPONENT 9
 
-// Unused
-StructuredBuffer<Complex> tilde_h_zero: register(t0, space1);
-
-// Actually used
 cbuffer SceneData: register(b0, space0) {
     column_major float4x4 view;
     column_major float4x4 projection;
@@ -17,8 +13,11 @@ cbuffer SceneData: register(b0, space0) {
     float4 sunlight_color;
 };
 
-RWStructuredBuffer<Complex> ifft_input: register(u1, space1);
-RWStructuredBuffer<Complex> ifft_output: register(u2, space1);
+StructuredBuffer<Complex> tilde_h_zero: register(t0, space1);
+StructuredBuffer<Complex> tilde_h_zero_conjugate: register(t1, space1);
+
+StructuredBuffer<Complex> ifft_input: register(t2, space1);
+RWStructuredBuffer<Complex> ifft_output: register(u3, space1);
 
 struct OutputVertex {
     float4 pos: SV_Position;
@@ -33,16 +32,40 @@ groupshared Complex pingpong[2][OCEAN_DIM];
 
 [numthreads(OCEAN_DIM, 1, 1)]
 void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
+    if (fog_distances.w == 0) {
+        // Calculate spectrum
+        float2 l = fog_distances.xy;
+
+        float2 k = uint2(x * 2.0 * PI / l.x, z * 2.0 * PI / l.y);
+        float w_k_t = sqrt(9.81 * length(k)) * fog_distances.z;
+
+        // For now I'm hardcoding the actual ocean patch width
+        uint idx = z * OCEAN_DIM + x;
+
+        // Now we compute tilde_h at time t
+        pingpong[0][idx] = complex_add(
+            complex_mul(tilde_h_zero[idx], complex_exp(w_k_t)),
+            complex_mul(tilde_h_zero_conjugate[idx], complex_exp(-w_k_t))
+        );
+
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    // Do IFFT
     const float N = float(OCEAN_DIM);
 
     // STEP 1: load row/column and reorder
     int nj = (reversebits(x) >> (32 - OCEAN_DIM_EXPONENT)) & (OCEAN_DIM - 1);
-    pingpong[0][nj] = ifft_input[z * OCEAN_DIM + x];
+    if (fog_distances.w == 0) {
+        pingpong[1][nj] = pingpong[0][x];
+    } else {
+        pingpong[1][nj] = ifft_input[x * OCEAN_DIM + z];
+    }
 
     GroupMemoryBarrierWithGroupSync();
 
     // STEP 2: perform butterfly passes
-    int src = 0;
+    int src = 1;
 
     for (int s = 1; s <= OCEAN_DIM_EXPONENT; ++s) {
         int m = 1U << s;             // butterfly group height
@@ -59,7 +82,7 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
         Complex even = pingpong[src][i + j];
         Complex odd = pingpong[src][i + j + mh];
 
-        src = s % 2;
+        src = 1 - src;
         pingpong[src][x] = complex_add(even, complex_mul(W_N_k, odd));
 
         GroupMemoryBarrierWithGroupSync();
