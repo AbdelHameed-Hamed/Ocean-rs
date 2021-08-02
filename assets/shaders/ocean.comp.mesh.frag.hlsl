@@ -2,12 +2,13 @@
 
 #define OCEAN_DIM 512
 #define OCEAN_DIM_EXPONENT 9
+#define OCEAN_DIM_RECIPROCAL 0.001953125 // 1 / OCEAN_DIM
 
 cbuffer SceneData: register(b0, space0) {
     column_major float4x4 view;
     column_major float4x4 projection;
     float4 fog_color; // w is for exponent
-    float4 fog_distances; //x for min, y for max, z for time, w unused.
+    float4 fog_distances; //x for min, y for max, z for time, w is unused.
     float4 ambient_color;
     float4 sunlight_direction; //w for sun power
     float4 sunlight_color;
@@ -16,12 +17,7 @@ cbuffer SceneData: register(b0, space0) {
 StructuredBuffer<Complex> tilde_h_zero: register(t0, space1);
 StructuredBuffer<Complex> tilde_h_zero_conjugate: register(t1, space1);
 
-StructuredBuffer<Complex> ifft_input: register(t2, space1);
-RWStructuredBuffer<Complex> ifft_output: register(u3, space1);
-
-struct OutputVertex {
-    float4 pos: SV_Position;
-};
+RWStructuredBuffer<Complex> ifft_output: register(u2, space1);
 
 //------------------------------------------------------------------------------------------------------
 // Compute Shader
@@ -30,16 +26,20 @@ struct OutputVertex {
 // Based on https://github.com/asylum2010/Asylum_Tutorials/blob/master/Media/ShadersGL/fourier_fft.comp
 groupshared Complex pingpong[2][OCEAN_DIM];
 
+[[vk::push_constant]]
+struct {
+    float4 flags;
+} flags;
+
 [numthreads(OCEAN_DIM, 1, 1)]
 void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
-    if (fog_distances.w == 0) {
+    if (flags.flags.x == 0) {
         // Calculate spectrum
         float2 l = fog_distances.xy;
 
         float2 k = uint2(x * 2.0 * PI / l.x, z * 2.0 * PI / l.y);
         float w_k_t = sqrt(9.81 * length(k)) * fog_distances.z;
 
-        // For now I'm hardcoding the actual ocean patch width
         uint idx = z * OCEAN_DIM + x;
 
         // Now we compute tilde_h at time t
@@ -52,14 +52,12 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     }
 
     // Do IFFT
-    const float N = float(OCEAN_DIM);
-
     // STEP 1: load row/column and reorder
     int nj = (reversebits(x) >> (32 - OCEAN_DIM_EXPONENT)) & (OCEAN_DIM - 1);
-    if (fog_distances.w == 0) {
+    if (flags.flags.x == 0) {
         pingpong[1][nj] = pingpong[0][x];
     } else {
-        pingpong[1][nj] = ifft_input[x * OCEAN_DIM + z];
+        pingpong[1][nj] = ifft_output[z * OCEAN_DIM + x];
     }
 
     GroupMemoryBarrierWithGroupSync();
@@ -68,7 +66,7 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     int src = 1;
 
     for (int s = 1; s <= OCEAN_DIM_EXPONENT; ++s) {
-        int m = 1U << s;             // butterfly group height
+        int m = 1U << s;            // butterfly group height
         int mh = m >> 1;            // butterfly group half height
 
         int k = (x * (OCEAN_DIM / m)) & (OCEAN_DIM - 1);
@@ -76,7 +74,7 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
         int j = (x & (mh - 1));     // butterfly index in group
 
         // twiddle factor W_N^k
-        float theta = (2 * PI * float(k)) / N;
+        float theta = (2 * PI * float(k)) * OCEAN_DIM_RECIPROCAL;
         Complex W_N_k = { cos(theta), sin(theta) };
 
         Complex even = pingpong[src][i + j];
@@ -89,7 +87,8 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     }
 
     // STEP 3: write output
-    ifft_output[x * OCEAN_DIM + z] = pingpong[src][x];
+    ifft_output[x * OCEAN_DIM + z].real = pingpong[src][x].real * OCEAN_DIM_RECIPROCAL;
+    ifft_output[x * OCEAN_DIM + z].imag = pingpong[src][x].imag * OCEAN_DIM_RECIPROCAL;
 }
 
 //------------------------------------------------------------------------------------------------------
@@ -104,6 +103,10 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
 #define patch_dim 16
 #define patch_vertex_count (patch_dim * patch_dim)
 #define patch_triangle_count ((patch_dim - 1) * (patch_dim - 1) * 2)
+
+struct OutputVertex {
+    float4 pos: SV_Position;
+};
 
 [outputtopology("triangle")]
 [numthreads(32, 1, 1)]
@@ -133,7 +136,7 @@ void ms_main(
             // Transform the vertex and register it
             out_verts[vert_idx].pos = mul(
                 mul(projection, view),
-                float4(global_x, ifft_output[global_idx].real * 1000.0, global_z, 1.0)
+                float4(global_x, ifft_output[global_idx].real, global_z, 1.0)
             );
 
             // Now figure which quad you represent and register its triangles
