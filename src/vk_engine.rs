@@ -531,7 +531,7 @@ impl VkEngine {
             1,
             vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::MESH_NV,
         );
-        let tilda_h_t_binding = vk_initializers::descriptor_set_layout_binding(
+        let ifft_output_binding = vk_initializers::descriptor_set_layout_binding(
             vk::DescriptorType::STORAGE_BUFFER,
             2,
             1,
@@ -541,7 +541,7 @@ impl VkEngine {
         let bindings = [
             tilda_h_binding,
             tilda_h_conjugate_binding,
-            tilda_h_t_binding,
+            ifft_output_binding,
         ];
         let tilda_hs_descriptor_layout_info =
             vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
@@ -681,27 +681,27 @@ impl VkEngine {
             .buffer_info(&tilda_h_conjugate_buffer_infos)
             .build();
 
-        let tilda_h_t_size = (size_of::<Complex>() * tilde_h_zero.len()) as u64;
-        let (tilda_h_t_buffer, tilda_h_t_buffer_memory) = vk_initializers::create_buffer(
+        let ifft_output_size = (size_of::<Complex>() * tilde_h_zero.len()) as u64;
+        let (ifft_output_buffer, ifft_output_buffer_memory) = vk_initializers::create_buffer(
             &instance,
             physical_device,
             &device,
-            tilda_h_t_size,
+            ifft_output_size,
             vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         );
 
-        let tilda_h_t_buffer_info = vk::DescriptorBufferInfo::builder()
-            .buffer(tilda_h_t_buffer)
+        let ifft_output_buffer_info = vk::DescriptorBufferInfo::builder()
+            .buffer(ifft_output_buffer)
             .offset(0)
-            .range(tilda_h_t_size)
+            .range(ifft_output_size)
             .build();
-        let tilda_h_t_buffer_infos = [tilda_h_t_buffer_info];
-        let tilda_h_t_set_write = vk::WriteDescriptorSet::builder()
+        let ifft_output_buffer_infos = [ifft_output_buffer_info];
+        let ifft_output_set_write = vk::WriteDescriptorSet::builder()
             .dst_set(tilda_hs_descriptor_set)
             .dst_binding(2)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&tilda_h_t_buffer_infos)
+            .buffer_info(&ifft_output_buffer_infos)
             .build();
 
         unsafe {
@@ -709,17 +709,23 @@ impl VkEngine {
                 &[
                     tilda_h_set_write,
                     tilda_h_conjugate_set_write,
-                    tilda_h_t_set_write,
+                    ifft_output_set_write,
                 ],
                 &[],
             )
         };
 
+        let push_constant_ranges = [vk::PushConstantRange::builder()
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            .size(size_of::<Vec4>() as u32)
+            .build()];
+
         let triangle_pipeline_layout = unsafe {
             device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::builder()
-                        .set_layouts(&[global_set_layout, tilda_hs_descriptor_layout]),
+                        .set_layouts(&[global_set_layout, tilda_hs_descriptor_layout])
+                        .push_constant_ranges(&push_constant_ranges),
                     None,
                 )
                 .unwrap()
@@ -780,42 +786,18 @@ impl VkEngine {
 
         let triangle_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
 
-        let frequency_shader_module =
-            vk_initializers::create_shader_module(&device, "./shaders/frequency.comp.spv");
-        let row_ift_shader_module =
-            vk_initializers::create_shader_module(&device, "./shaders/row_ift.comp.spv");
-        let col_ift_shader_module =
-            vk_initializers::create_shader_module(&device, "./shaders/col_ift.comp.spv");
+        let spectrum_and_ifft_shader_module =
+            vk_initializers::create_shader_module(&device, "./shaders/ocean.comp.spv");
 
-        let frequency_pipline_create_info = vk::ComputePipelineCreateInfo::builder()
+        let spectrum_and_ifft_pipline_create_info = vk::ComputePipelineCreateInfo::builder()
             .stage(vk_initializers::pipeline_shader_stage_create_info(
                 vk::ShaderStageFlags::COMPUTE,
-                frequency_shader_module,
+                spectrum_and_ifft_shader_module,
                 "cs_main\0",
             ))
             .layout(triangle_pipeline_layout)
             .build();
-        let row_ift_pipline_create_info = vk::ComputePipelineCreateInfo::builder()
-            .stage(vk_initializers::pipeline_shader_stage_create_info(
-                vk::ShaderStageFlags::COMPUTE,
-                row_ift_shader_module,
-                "cs_main\0",
-            ))
-            .layout(triangle_pipeline_layout)
-            .build();
-        let col_ift_pipline_create_info = vk::ComputePipelineCreateInfo::builder()
-            .stage(vk_initializers::pipeline_shader_stage_create_info(
-                vk::ShaderStageFlags::COMPUTE,
-                col_ift_shader_module,
-                "cs_main\0",
-            ))
-            .layout(triangle_pipeline_layout)
-            .build();
-        let compute_teezak = [
-            frequency_pipline_create_info,
-            row_ift_pipline_create_info,
-            col_ift_pipline_create_info,
-        ];
+        let compute_teezak = [spectrum_and_ifft_pipline_create_info];
         let compute_pipelines = unsafe {
             device
                 .create_compute_pipelines(vk::PipelineCache::null(), &compute_teezak, None)
@@ -823,9 +805,7 @@ impl VkEngine {
         };
 
         unsafe {
-            device.destroy_shader_module(frequency_shader_module, None);
-            device.destroy_shader_module(row_ift_shader_module, None);
-            device.destroy_shader_module(col_ift_shader_module, None);
+            device.destroy_shader_module(spectrum_and_ifft_shader_module, None);
         };
 
         let camera = Camera::default();
@@ -889,8 +869,8 @@ impl VkEngine {
                         buffer_memory: tilda_h_conjugate_buffer_memory,
                     },
                     VkBuffer {
-                        buffer: tilda_h_t_buffer,
-                        buffer_memory: tilda_h_t_buffer_memory,
+                        buffer: ifft_output_buffer,
+                        buffer_memory: ifft_output_buffer_memory,
                     },
                 ],
                 meshlet_count: 1,
@@ -1071,6 +1051,7 @@ impl VkEngine {
         self.device
             .unmap_memory(self.scene_data_buffer.buffer_memory);
 
+        // Spectrum and row ifft phase
         self.device.cmd_bind_pipeline(
             frame_data.command_buffer,
             vk::PipelineBindPoint::COMPUTE,
@@ -1087,12 +1068,22 @@ impl VkEngine {
             ],
             &[scene_data_offset as u32],
         );
-        self.device.cmd_dispatch(
+        self.device.cmd_push_constants(
             frame_data.command_buffer,
-            OCEAN_PATCH_DIM as u32 / 16,
-            OCEAN_PATCH_DIM as u32 / 16,
-            1,
+            self.materials["default"].pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            &[Vec4 {
+                x: 0.0f32,
+                y: 0.0f32,
+                z: 0.0f32,
+                w: 0.0f32,
+            }]
+            .align_to::<u8>()
+            .1, // Forgive me, father, for I have sinned.
         );
+        self.device
+            .cmd_dispatch(frame_data.command_buffer, OCEAN_PATCH_DIM as u32, 1, 1);
 
         let memory_barrier = vk::MemoryBarrier::builder()
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -1109,17 +1100,23 @@ impl VkEngine {
             &[],
         );
 
-        self.device.cmd_bind_pipeline(
+        // Column ifft phase
+        self.device.cmd_push_constants(
             frame_data.command_buffer,
-            vk::PipelineBindPoint::COMPUTE,
-            self.compute_pipelines[1],
+            self.materials["default"].pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            &[Vec4 {
+                x: 1.0f32,
+                y: 0.0f32,
+                z: 0.0f32,
+                w: 0.0f32,
+            }]
+            .align_to::<u8>()
+            .1, // Forgive me, father, for I have sinned.
         );
-        self.device.cmd_dispatch(
-            frame_data.command_buffer,
-            OCEAN_PATCH_DIM as u32 / 64,
-            OCEAN_PATCH_DIM as u32,
-            1,
-        );
+        self.device
+            .cmd_dispatch(frame_data.command_buffer, OCEAN_PATCH_DIM as u32, 1, 1);
 
         let memory_barrier = vk::MemoryBarrier::builder()
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -1129,34 +1126,7 @@ impl VkEngine {
         self.device.cmd_pipeline_barrier(
             frame_data.command_buffer,
             vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::DependencyFlags::DEVICE_GROUP,
-            &memory_barriers,
-            &[],
-            &[],
-        );
-
-        self.device.cmd_bind_pipeline(
-            frame_data.command_buffer,
-            vk::PipelineBindPoint::COMPUTE,
-            self.compute_pipelines[2],
-        );
-        self.device.cmd_dispatch(
-            frame_data.command_buffer,
-            OCEAN_PATCH_DIM as u32,
-            OCEAN_PATCH_DIM as u32 / 64,
-            1,
-        );
-
-        let memory_barrier = vk::MemoryBarrier::builder()
-            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-            .dst_access_mask(vk::AccessFlags::SHADER_READ)
-            .build();
-        let memory_barriers = [memory_barrier];
-        self.device.cmd_pipeline_barrier(
-            frame_data.command_buffer,
-            vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::MESH_SHADER_NV,
+            vk::PipelineStageFlags::MESH_SHADER_NV,
             vk::DependencyFlags::DEVICE_GROUP,
             &memory_barriers,
             &[],
