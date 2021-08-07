@@ -1257,7 +1257,7 @@ impl VkEngine {
                         keycode: Some(pressed_key),
                         ..
                     } => {
-                        let camera_speed = 25.0 * delta_time;
+                        let camera_speed = 100.0 * delta_time;
                         if pressed_key == Keycode::W {
                             self.camera.pos += self.camera.front * camera_speed;
                         }

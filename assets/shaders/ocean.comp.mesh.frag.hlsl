@@ -43,7 +43,7 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
         uint idx = z * OCEAN_DIM + x;
 
         // Now we compute tilde_h at time t
-        pingpong[0][idx] = complex_add(
+        pingpong[0][x] = complex_add(
             complex_mul(tilde_h_zero[idx], complex_exp(w_k_t)),
             complex_mul(tilde_h_zero_conjugate[idx], complex_exp(-w_k_t))
         );
@@ -69,20 +69,20 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
         int m = 1U << s;            // butterfly group height
         int mh = m >> 1;            // butterfly group half height
 
-        int k = (x * (OCEAN_DIM / m)) & (OCEAN_DIM - 1);
-        int i = (x & ~(m - 1));     // butterfly group starting offset
-        int j = (x & (mh - 1));     // butterfly index in group
+        if (x % m < mh) {
+            // twiddle factor W_N^k
+            float theta = (2 * PI * float(x) / float(m));
+            Complex W_N_k = { cos(theta), sin(theta) };
 
-        // twiddle factor W_N^k
-        float theta = (2 * PI * float(k)) * OCEAN_DIM_RECIPROCAL;
-        Complex W_N_k = { cos(theta), sin(theta) };
+            Complex even = pingpong[src][x];
+            Complex odd = complex_mul(W_N_k, pingpong[src][x + mh]);
 
-        Complex even = pingpong[src][i + j];
-        Complex odd = pingpong[src][i + j + mh];
-
-        src = 1 - src;
-        pingpong[src][x] = complex_add(even, complex_mul(W_N_k, odd));
-
+            src = 1 - src;
+            pingpong[src][x] = complex_add(even, odd);
+            odd.real *= -1;
+            odd.imag *= -1;
+            pingpong[src][x + mh] = complex_add(even, odd);
+        }
         GroupMemoryBarrierWithGroupSync();
     }
 
