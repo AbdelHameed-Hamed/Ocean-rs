@@ -52,7 +52,7 @@ struct Mesh {
 struct MeshShaderData {
     descriptor_set_layout: vk::DescriptorSetLayout,
     descriptor_set: vk::DescriptorSet,
-    buffers: [VkBuffer; 3],
+    buffers: [VkBuffer; 4],
     meshlet_count: u32,
 }
 
@@ -523,17 +523,23 @@ impl VkEngine {
             vk::DescriptorType::STORAGE_BUFFER,
             0,
             1,
-            vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::MESH_NV,
+            vk::ShaderStageFlags::COMPUTE,
         );
         let tilda_h_conjugate_binding = vk_initializers::descriptor_set_layout_binding(
             vk::DescriptorType::STORAGE_BUFFER,
             1,
             1,
-            vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::MESH_NV,
+            vk::ShaderStageFlags::COMPUTE,
         );
-        let ifft_output_binding = vk_initializers::descriptor_set_layout_binding(
+        let ifft_output_input_binding = vk_initializers::descriptor_set_layout_binding(
             vk::DescriptorType::STORAGE_BUFFER,
             2,
+            1,
+            vk::ShaderStageFlags::COMPUTE,
+        );
+        let ifft_input_output_binding = vk_initializers::descriptor_set_layout_binding(
+            vk::DescriptorType::STORAGE_BUFFER,
+            3,
             1,
             vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::MESH_NV,
         );
@@ -541,7 +547,8 @@ impl VkEngine {
         let bindings = [
             tilda_h_binding,
             tilda_h_conjugate_binding,
-            ifft_output_binding,
+            ifft_output_input_binding,
+            ifft_input_output_binding,
         ];
         let tilda_hs_descriptor_layout_info =
             vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
@@ -681,27 +688,52 @@ impl VkEngine {
             .buffer_info(&tilda_h_conjugate_buffer_infos)
             .build();
 
-        let ifft_output_size = (size_of::<Complex>() * tilde_h_zero.len()) as u64;
-        let (ifft_output_buffer, ifft_output_buffer_memory) = vk_initializers::create_buffer(
-            &instance,
-            physical_device,
-            &device,
-            ifft_output_size,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        );
+        let ifft_output_input_size = (size_of::<Complex>() * tilde_h_zero.len()) as u64;
+        let (ifft_output_input_buffer, ifft_output_input_buffer_memory) =
+            vk_initializers::create_buffer(
+                &instance,
+                physical_device,
+                &device,
+                ifft_output_input_size,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            );
 
-        let ifft_output_buffer_info = vk::DescriptorBufferInfo::builder()
-            .buffer(ifft_output_buffer)
+        let ifft_output_input_buffer_info = vk::DescriptorBufferInfo::builder()
+            .buffer(ifft_output_input_buffer)
             .offset(0)
-            .range(ifft_output_size)
+            .range(ifft_output_input_size)
             .build();
-        let ifft_output_buffer_infos = [ifft_output_buffer_info];
-        let ifft_output_set_write = vk::WriteDescriptorSet::builder()
+        let ifft_output_input_buffer_infos = [ifft_output_input_buffer_info];
+        let ifft_output_input_set_write = vk::WriteDescriptorSet::builder()
             .dst_set(tilda_hs_descriptor_set)
             .dst_binding(2)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&ifft_output_buffer_infos)
+            .buffer_info(&ifft_output_input_buffer_infos)
+            .build();
+
+        let ifft_input_output_size = (size_of::<Complex>() * tilde_h_zero.len()) as u64;
+        let (ifft_input_output_buffer, ifft_input_output_buffer_memory) =
+            vk_initializers::create_buffer(
+                &instance,
+                physical_device,
+                &device,
+                ifft_input_output_size,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            );
+
+        let ifft_input_output_buffer_info = vk::DescriptorBufferInfo::builder()
+            .buffer(ifft_input_output_buffer)
+            .offset(0)
+            .range(ifft_input_output_size)
+            .build();
+        let ifft_input_output_buffer_infos = [ifft_input_output_buffer_info];
+        let ifft_input_output_set_write = vk::WriteDescriptorSet::builder()
+            .dst_set(tilda_hs_descriptor_set)
+            .dst_binding(3)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(&ifft_input_output_buffer_infos)
             .build();
 
         unsafe {
@@ -709,7 +741,8 @@ impl VkEngine {
                 &[
                     tilda_h_set_write,
                     tilda_h_conjugate_set_write,
-                    ifft_output_set_write,
+                    ifft_output_input_set_write,
+                    ifft_input_output_set_write,
                 ],
                 &[],
             )
@@ -869,8 +902,12 @@ impl VkEngine {
                         buffer_memory: tilda_h_conjugate_buffer_memory,
                     },
                     VkBuffer {
-                        buffer: ifft_output_buffer,
-                        buffer_memory: ifft_output_buffer_memory,
+                        buffer: ifft_output_input_buffer,
+                        buffer_memory: ifft_output_input_buffer_memory,
+                    },
+                    VkBuffer {
+                        buffer: ifft_output_input_buffer,
+                        buffer_memory: ifft_input_output_buffer_memory,
                     },
                 ],
                 meshlet_count: 1,

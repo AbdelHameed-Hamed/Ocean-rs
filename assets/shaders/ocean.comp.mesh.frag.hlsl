@@ -17,7 +17,8 @@ cbuffer SceneData: register(b0, space0) {
 StructuredBuffer<Complex> tilde_h_zero: register(t0, space1);
 StructuredBuffer<Complex> tilde_h_zero_conjugate: register(t1, space1);
 
-RWStructuredBuffer<Complex> ifft_output: register(u2, space1);
+RWStructuredBuffer<Complex> ifft_output_input: register(u2, space1);
+RWStructuredBuffer<Complex> ifft_input_output: register(u3, space1);
 
 //------------------------------------------------------------------------------------------------------
 // Compute Shader
@@ -57,7 +58,7 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     if (flags.flags.x == 0) {
         pingpong[1][nj] = pingpong[0][x];
     } else {
-        pingpong[1][nj] = ifft_output[z * OCEAN_DIM + x];
+        pingpong[1][nj] = ifft_output_input[z * OCEAN_DIM + x];
     }
 
     GroupMemoryBarrierWithGroupSync();
@@ -87,8 +88,14 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     }
 
     // STEP 3: write output
-    ifft_output[x * OCEAN_DIM + z].real = pingpong[src][x].real * OCEAN_DIM_RECIPROCAL;
-    ifft_output[x * OCEAN_DIM + z].imag = pingpong[src][x].imag * OCEAN_DIM_RECIPROCAL;
+    uint idx = x * OCEAN_DIM + z;
+    if (flags.flags.x == 0) {
+        ifft_output_input[idx].real = pingpong[src][x].real * OCEAN_DIM_RECIPROCAL;
+        ifft_output_input[idx].imag = pingpong[src][x].imag * OCEAN_DIM_RECIPROCAL;
+    } else {
+        ifft_input_output[idx].real = pingpong[src][x].real * OCEAN_DIM_RECIPROCAL;
+        ifft_input_output[idx].imag = pingpong[src][x].imag * OCEAN_DIM_RECIPROCAL;
+    }
 }
 
 //------------------------------------------------------------------------------------------------------
@@ -136,7 +143,7 @@ void ms_main(
             // Transform the vertex and register it
             out_verts[vert_idx].pos = mul(
                 mul(projection, view),
-                float4(global_x, ifft_output[global_idx].real, global_z, 1.0)
+                float4(global_x, ifft_input_output[global_idx].real * 1000, global_z, 1.0)
             );
 
             // Now figure which quad you represent and register its triangles
