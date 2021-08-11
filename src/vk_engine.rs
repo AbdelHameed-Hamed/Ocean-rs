@@ -906,7 +906,7 @@ impl VkEngine {
                         buffer_memory: ifft_output_input_buffer_memory,
                     },
                     VkBuffer {
-                        buffer: ifft_output_input_buffer,
+                        buffer: ifft_input_output_buffer,
                         buffer_memory: ifft_input_output_buffer_memory,
                     },
                 ],
