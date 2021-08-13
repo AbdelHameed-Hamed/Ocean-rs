@@ -38,7 +38,10 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
         // Calculate spectrum
         float2 l = fog_distances.xy;
 
-        float2 k = uint2(x * 2.0 * PI / l.x, z * 2.0 * PI / l.y);
+        float2 k = uint2(
+            (int(x) - OCEAN_DIM / 2) * 2 * PI / l.x,
+            (int(z) - OCEAN_DIM / 2) * 2 * PI / l.y
+        );
         float w_k_t = sqrt(9.81 * length(k)) * fog_distances.z;
 
         uint idx = z * OCEAN_DIM + x;
@@ -67,34 +70,34 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     int src = 1;
 
     for (int s = 1; s <= OCEAN_DIM_EXPONENT; ++s) {
-        int m = 1U << s;            // butterfly group height
+        int m = 1L << s;            // butterfly group height
         int mh = m >> 1;            // butterfly group half height
 
         if (x % m < mh) {
             // twiddle factor W_N^k
-            float theta = (2 * PI * float(x) / float(m));
-            Complex W_N_k = { cos(theta), sin(theta) };
+            float theta = 2 * PI * x / m;
+            Complex W_N_k = complex_exp(theta);
 
             Complex even = pingpong[src][x];
             Complex odd = complex_mul(W_N_k, pingpong[src][x + mh]);
 
             src = 1 - src;
             pingpong[src][x] = complex_add(even, odd);
-            odd.real *= -1;
-            odd.imag *= -1;
-            pingpong[src][x + mh] = complex_add(even, odd);
+            pingpong[src][x + mh] = complex_add(even, complex_float_mul(odd, -1));
         }
+
         GroupMemoryBarrierWithGroupSync();
     }
 
     // STEP 3: write output
     uint idx = x * OCEAN_DIM + z;
     if (flags.flags.x == 0) {
-        ifft_output_input[idx].real = pingpong[src][x].real * OCEAN_DIM_RECIPROCAL;
-        ifft_output_input[idx].imag = pingpong[src][x].imag * OCEAN_DIM_RECIPROCAL;
+        ifft_output_input[idx] = complex_float_mul(pingpong[src][x], (x % 2 ? -1 : 1));
     } else {
-        ifft_input_output[idx].real = pingpong[src][x].real * OCEAN_DIM_RECIPROCAL;
-        ifft_input_output[idx].imag = pingpong[src][x].imag * OCEAN_DIM_RECIPROCAL;
+        ifft_input_output[idx] = complex_float_mul(
+            pingpong[src][x],
+            OCEAN_DIM_RECIPROCAL * OCEAN_DIM_RECIPROCAL * (x % 2 ? -1 : 1)
+        );
     }
 }
 

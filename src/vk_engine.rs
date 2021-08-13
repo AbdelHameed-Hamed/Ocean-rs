@@ -469,14 +469,15 @@ impl VkEngine {
         let l = wind_speed * wind_speed / g;
         let l_x = 1000.0;
         let l_z = 1000.0;
+        let PI = std::f32::consts::PI;
 
         let mut rnd_state = 1;
 
         for i in 0..OCEAN_PATCH_DIM {
             for j in 0..OCEAN_PATCH_DIM {
                 let k = Vec2 {
-                    x: i as f32 * 2.0 * std::f32::consts::PI / l_x,
-                    y: j as f32 * 2.0 * std::f32::consts::PI / l_z,
+                    x: (i as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * 2.0 * PI / l_x,
+                    y: (j as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * 2.0 * PI / l_z,
                 };
                 let k_length_sqr = if k.length_sqr() < (0.0001 * 0.0001) {
                     0.0001 * 0.0001
@@ -490,8 +491,8 @@ impl VkEngine {
                 let phillips_k = amplitude * b * c;
 
                 let k = Vec2 {
-                    x: -(i as f32) * 2.0 * std::f32::consts::PI / OCEAN_PATCH_DIM as f32,
-                    y: -(j as f32) * 2.0 * std::f32::consts::PI / OCEAN_PATCH_DIM as f32,
+                    x: -(i as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * 2.0 * PI / l_x as f32,
+                    y: -(j as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * 2.0 * PI / l_z as f32,
                 };
 
                 let c = f32::powi(Vec2::dot(k.normal(), wind_direction), 2);
