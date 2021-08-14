@@ -39,8 +39,8 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
         float2 l = fog_distances.xy;
 
         float2 k = uint2(
-            (int(x) - OCEAN_DIM / 2) * 2 * PI / l.x,
-            (int(z) - OCEAN_DIM / 2) * 2 * PI / l.y
+            (int(x) - OCEAN_DIM / 2) * TWO_PI / l.x,
+            (int(z) - OCEAN_DIM / 2) * TWO_PI / l.y
         );
         float w_k_t = sqrt(9.81 * length(k)) * fog_distances.z;
 
@@ -75,16 +75,17 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
 
         if (x % m < mh) {
             // twiddle factor W_N^k
-            float theta = 2 * PI * x / m;
+            float theta = TWO_PI * x / m;
             Complex W_N_k = complex_exp(theta);
 
             Complex even = pingpong[src][x];
             Complex odd = complex_mul(W_N_k, pingpong[src][x + mh]);
 
-            src = 1 - src;
-            pingpong[src][x] = complex_add(even, odd);
-            pingpong[src][x + mh] = complex_add(even, complex_float_mul(odd, -1));
+            pingpong[1 - src][x] = complex_add(even, odd);
+            pingpong[1 - src][x + mh] = complex_add(even, complex_float_mul(odd, -1));
         }
+
+        src = 1 - src;
 
         GroupMemoryBarrierWithGroupSync();
     }

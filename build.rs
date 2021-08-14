@@ -5,6 +5,11 @@ use std::process::Command;
 // dxc -T ms_6_5 -E ms_main -Zi -spirv ./assets/shaders/ocean.comp.mesh.frag.hlsl -Fo ./shaders/ocean.mesh.spv
 
 fn main() {
+    // First make sure that the outermost shaders folder exists
+    if let Err(_) = fs::read_dir("./shaders/") {
+        fs::create_dir("./shaders").unwrap();
+    }
+
     for entry in fs::read_dir("./assets/shaders/").expect("Path doesn't exist") {
         let entry = entry.unwrap();
         let path = entry.path();

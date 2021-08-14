@@ -1,7 +1,7 @@
 #ifndef __COMPLEX__
 #define __COMPLEX__
 
-#define PI 3.14159265358979323846264338327950288
+#define TWO_PI 6.283185307179586476925286766559
 
 struct Complex {
     float real;

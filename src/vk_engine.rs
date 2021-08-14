@@ -82,6 +82,7 @@ const MAX_OBJECTS: usize = 10_000;
 const OCEAN_PATCH_DIM: usize = 512;
 const L_X: f32 = 1000.0f32;
 const L_Y: f32 = 1000.0f32;
+const TWO_PI: f32 = std::f32::consts::PI * 2.0;
 
 struct FrameData {
     present_semaphore: vk::Semaphore,
@@ -467,17 +468,14 @@ impl VkEngine {
         let wind_direction = Vec2 { x: 1.0, y: 0.0 };
         let g = 9.81;
         let l = wind_speed * wind_speed / g;
-        let l_x = 1000.0;
-        let l_z = 1000.0;
-        let PI = std::f32::consts::PI;
 
         let mut rnd_state = 1;
 
         for i in 0..OCEAN_PATCH_DIM {
             for j in 0..OCEAN_PATCH_DIM {
                 let k = Vec2 {
-                    x: (i as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * 2.0 * PI / l_x,
-                    y: (j as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * 2.0 * PI / l_z,
+                    x: (i as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * TWO_PI / L_X,
+                    y: (j as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * TWO_PI / L_Y,
                 };
                 let k_length_sqr = if k.length_sqr() < (0.0001 * 0.0001) {
                     0.0001 * 0.0001
@@ -491,8 +489,8 @@ impl VkEngine {
                 let phillips_k = amplitude * b * c;
 
                 let k = Vec2 {
-                    x: -(i as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * 2.0 * PI / l_x as f32,
-                    y: -(j as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * 2.0 * PI / l_z as f32,
+                    x: -(i as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * TWO_PI / L_X,
+                    y: -(j as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * TWO_PI / L_Y,
                 };
 
                 let c = f32::powi(Vec2::dot(k.normal(), wind_direction), 2);
