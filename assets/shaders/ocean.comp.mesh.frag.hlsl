@@ -1,7 +1,7 @@
 #include "complex.hlsl"
 
 #define OCEAN_DIM 512
-#define OCEAN_DIM_EXPONENT 9
+#define OCEAN_DIM_EXPONENT 9 // log_2(OCEAN_DIM)
 #define OCEAN_DIM_RECIPROCAL 0.001953125 // 1 / OCEAN_DIM
 
 cbuffer SceneData: register(b0, space0) {
@@ -51,8 +51,6 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
             complex_mul(tilde_h_zero[idx], complex_exp(w_k_t)),
             complex_mul(tilde_h_zero_conjugate[idx], complex_exp(-w_k_t))
         );
-
-        GroupMemoryBarrierWithGroupSync();
     }
 
     // Do IFFT
@@ -75,11 +73,10 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
 
         if (x % m < mh) {
             // twiddle factor W_N^k
-            float theta = TWO_PI * x / m;
-            Complex W_N_k = complex_exp(theta);
+            Complex w_n_k = complex_exp(TWO_PI * x / m);
 
             Complex even = pingpong[src][x];
-            Complex odd = complex_mul(W_N_k, pingpong[src][x + mh]);
+            Complex odd = complex_mul(w_n_k, pingpong[src][x + mh]);
 
             pingpong[1 - src][x] = complex_add(even, odd);
             pingpong[1 - src][x + mh] = complex_add(even, complex_float_mul(odd, -1));
@@ -147,7 +144,7 @@ void ms_main(
             // Transform the vertex and register it
             out_verts[vert_idx].pos = mul(
                 mul(projection, view),
-                float4(global_x, ifft_input_output[global_idx].real * 1000, global_z, 1.0)
+                float4(global_x, ifft_input_output[global_idx].real * 100, global_z, 1.0)
             );
 
             // Now figure which quad you represent and register its triangles
@@ -177,5 +174,5 @@ void ms_main(
 //------------------------------------------------------------------------------------------------------
 
 float4 fs_main(OutputVertex input): SV_Target {
-    return float4(1.0, 1.0, 1.0, 1.0);
+    return float4(6/255.0, 66/255.0, 115/255.0, 1.0);
 }

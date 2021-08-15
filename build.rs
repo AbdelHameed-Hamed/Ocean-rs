@@ -2,7 +2,7 @@ use std::fs;
 use std::process::Command;
 
 // Example:
-// dxc -T ms_6_5 -E ms_main -Zi -spirv ./assets/shaders/ocean.comp.mesh.frag.hlsl -Fo ./shaders/ocean.mesh.spv
+// dxc -T ms_6_5 -E ms_main -Zi -spirv ./assets/shaders/skybox.mesh.frag.hlsl -Fo ./shaders/skybox.mesh.spv
 
 fn main() {
     // First make sure that the outermost shaders folder exists

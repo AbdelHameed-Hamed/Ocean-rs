@@ -226,8 +226,6 @@ pub struct VkEngine {
     command_pool: vk::CommandPool,
     frame_data: [FrameData; FRAME_OVERLAP],
     scene_data_buffer: VkBuffer,
-    triangle_vertex_shader_module: vk::ShaderModule,
-    triangle_fragment_shader_module: vk::ShaderModule,
     materials: HashMap<String, Material>,
     camera: Camera,
     last_timestamp: std::time::Instant,
@@ -752,7 +750,7 @@ impl VkEngine {
             .size(size_of::<Vec4>() as u32)
             .build()];
 
-        let triangle_pipeline_layout = unsafe {
+        let ocean_pipeline_layout = unsafe {
             device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::builder()
@@ -763,9 +761,9 @@ impl VkEngine {
                 .unwrap()
         };
 
-        let triangle_mesh_shader_module =
+        let ocean_mesh_shader_module =
             vk_initializers::create_shader_module(&device, "./shaders/ocean.mesh.spv");
-        let triangle_fragment_shader_module =
+        let ocean_fragment_shader_module =
             vk_initializers::create_shader_module(&device, "./shaders/ocean.frag.spv");
 
         let mut pipeline_builder = VkPipelineBuilder::default();
@@ -774,14 +772,14 @@ impl VkEngine {
             .shader_stages
             .push(vk_initializers::pipeline_shader_stage_create_info(
                 vk::ShaderStageFlags::MESH_NV,
-                triangle_mesh_shader_module,
+                ocean_mesh_shader_module,
                 "ms_main\0",
             ));
         pipeline_builder
             .shader_stages
             .push(vk_initializers::pipeline_shader_stage_create_info(
                 vk::ShaderStageFlags::FRAGMENT,
-                triangle_fragment_shader_module,
+                ocean_fragment_shader_module,
                 "fs_main\0",
             ));
 
@@ -814,9 +812,58 @@ impl VkEngine {
 
         pipeline_builder.depth_stencil_state = vk_initializers::create_depth_stencil_create_info();
 
-        pipeline_builder.pipeline_layout = triangle_pipeline_layout;
+        pipeline_builder.pipeline_layout = ocean_pipeline_layout;
 
-        let triangle_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
+        let ocean_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
+
+        unsafe {
+            device.destroy_shader_module(ocean_mesh_shader_module, None);
+            device.destroy_shader_module(ocean_fragment_shader_module, None);
+        };
+
+        let skybox_pipeline_layout = unsafe {
+            device
+                .create_pipeline_layout(
+                    &vk::PipelineLayoutCreateInfo::builder().set_layouts(&[global_set_layout]),
+                    None,
+                )
+                .unwrap()
+        };
+
+        let skybox_mesh_shader_module =
+            vk_initializers::create_shader_module(&device, "./shaders/skybox.mesh.spv");
+        let skybox_fragment_shader_module =
+            vk_initializers::create_shader_module(&device, "./shaders/skybox.frag.spv");
+
+        pipeline_builder.shader_stages.clear();
+        pipeline_builder
+            .shader_stages
+            .push(vk_initializers::pipeline_shader_stage_create_info(
+                vk::ShaderStageFlags::MESH_NV,
+                skybox_mesh_shader_module,
+                "ms_main\0",
+            ));
+        pipeline_builder
+            .shader_stages
+            .push(vk_initializers::pipeline_shader_stage_create_info(
+                vk::ShaderStageFlags::FRAGMENT,
+                skybox_fragment_shader_module,
+                "fs_main\0",
+            ));
+
+        pipeline_builder.rasterizer =
+            vk_initializers::rasterization_state_create_info(vk::PolygonMode::FILL);
+
+        pipeline_builder.depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::default();
+
+        pipeline_builder.pipeline_layout = skybox_pipeline_layout;
+
+        let skybox_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
+
+        unsafe {
+            device.destroy_shader_module(skybox_mesh_shader_module, None);
+            device.destroy_shader_module(skybox_fragment_shader_module, None);
+        };
 
         let spectrum_and_ifft_shader_module =
             vk_initializers::create_shader_module(&device, "./shaders/ocean.comp.spv");
@@ -827,12 +874,12 @@ impl VkEngine {
                 spectrum_and_ifft_shader_module,
                 "cs_main\0",
             ))
-            .layout(triangle_pipeline_layout)
+            .layout(ocean_pipeline_layout)
             .build();
-        let compute_teezak = [spectrum_and_ifft_pipline_create_info];
+        let compute_infos = [spectrum_and_ifft_pipline_create_info];
         let compute_pipelines = unsafe {
             device
-                .create_compute_pipelines(vk::PipelineCache::null(), &compute_teezak, None)
+                .create_compute_pipelines(vk::PipelineCache::null(), &compute_infos, None)
                 .unwrap()
         };
 
@@ -844,10 +891,17 @@ impl VkEngine {
 
         let mut material_map = HashMap::<String, Material>::new();
         material_map.insert(
-            "default".to_string(),
+            "ocean".to_string(),
             Material {
-                pipeline: triangle_pipeline,
-                pipeline_layout: triangle_pipeline_layout,
+                pipeline: ocean_pipeline,
+                pipeline_layout: ocean_pipeline_layout,
+            },
+        );
+        material_map.insert(
+            "skybox".to_string(),
+            Material {
+                pipeline: skybox_pipeline,
+                pipeline_layout: skybox_pipeline_layout,
             },
         );
 
@@ -883,8 +937,6 @@ impl VkEngine {
                 buffer: scene_param_buffer,
                 buffer_memory: scene_param_buffer_memory,
             },
-            triangle_vertex_shader_module: triangle_mesh_shader_module, // ToDo
-            triangle_fragment_shader_module,
             materials: material_map,
             camera,
             last_timestamp: std::time::Instant::now(),
@@ -935,11 +987,6 @@ impl VkEngine {
 
     pub unsafe fn cleanup(&mut self) {
         self.device.device_wait_idle().unwrap();
-
-        self.device
-            .destroy_shader_module(self.triangle_vertex_shader_module, None);
-        self.device
-            .destroy_shader_module(self.triangle_fragment_shader_module, None);
 
         self.device
             .destroy_descriptor_set_layout(self.global_set_layout, None);
@@ -1070,6 +1117,7 @@ impl VkEngine {
             .duration_since(self.start)
             .as_millis() as f32
             / 1000.0;
+        scene_data.fog_distances.w = self.camera.fov;
 
         let scene_data_offset =
             (Self::return_aligned_size(self.physical_device_properties, size_of::<SceneData>())
@@ -1096,7 +1144,7 @@ impl VkEngine {
         self.device.cmd_bind_descriptor_sets(
             frame_data.command_buffer,
             vk::PipelineBindPoint::COMPUTE,
-            self.materials["default"].pipeline_layout,
+            self.materials["ocean"].pipeline_layout,
             0,
             &[
                 self.global_descriptor_set,
@@ -1106,7 +1154,7 @@ impl VkEngine {
         );
         self.device.cmd_push_constants(
             frame_data.command_buffer,
-            self.materials["default"].pipeline_layout,
+            self.materials["ocean"].pipeline_layout,
             vk::ShaderStageFlags::COMPUTE,
             0,
             &[Vec4 {
@@ -1139,7 +1187,7 @@ impl VkEngine {
         // Column ifft phase
         self.device.cmd_push_constants(
             frame_data.command_buffer,
-            self.materials["default"].pipeline_layout,
+            self.materials["ocean"].pipeline_layout,
             vk::ShaderStageFlags::COMPUTE,
             0,
             &[Vec4 {
@@ -1200,13 +1248,31 @@ impl VkEngine {
         self.device.cmd_bind_pipeline(
             frame_data.command_buffer,
             vk::PipelineBindPoint::GRAPHICS,
-            self.materials["default"].pipeline,
+            self.materials["skybox"].pipeline,
         );
 
         self.device.cmd_bind_descriptor_sets(
             frame_data.command_buffer,
             vk::PipelineBindPoint::GRAPHICS,
-            self.materials["default"].pipeline_layout,
+            self.materials["skybox"].pipeline_layout,
+            0,
+            &[self.global_descriptor_set],
+            &[scene_data_offset as u32],
+        );
+
+        self.mesh_shader
+            .cmd_draw_mesh_tasks(frame_data.command_buffer, 1, 0);
+
+        self.device.cmd_bind_pipeline(
+            frame_data.command_buffer,
+            vk::PipelineBindPoint::GRAPHICS,
+            self.materials["ocean"].pipeline,
+        );
+
+        self.device.cmd_bind_descriptor_sets(
+            frame_data.command_buffer,
+            vk::PipelineBindPoint::GRAPHICS,
+            self.materials["ocean"].pipeline_layout,
             0,
             &[
                 self.global_descriptor_set,

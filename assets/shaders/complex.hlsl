@@ -35,4 +35,10 @@ Complex complex_float_mul(Complex lhs, float rhs) {
     return result;
 }
 
+Complex complex_conjugate(Complex self) {
+    Complex result = { self.real, -self.imag };
+
+    return result;
+}
+
 #endif
