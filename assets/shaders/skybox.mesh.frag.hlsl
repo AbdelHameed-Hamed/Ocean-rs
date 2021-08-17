@@ -17,7 +17,7 @@ void ms_main(out vertices OutputVertex out_verts[4], out indices uint3 out_tris[
 }
 
 cbuffer SceneData: register(b0, space0) {
-    column_major float4x4 view;
+    row_major float4x4 view; // This isn't right.....
     column_major float4x4 projection;
     float4 fog_color; // w is for exponent
     float4 fog_distances; //x for min, y for max, z for time, and w for FoV.
@@ -40,6 +40,7 @@ float4 fs_main(float4 frag_coord: SV_Position): SV_Target {
         ),
         1.0
     );
+    rd *= -1;
     rd = mul(view, rd);
 
     // Sky with haze
