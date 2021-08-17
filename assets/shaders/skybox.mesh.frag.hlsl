@@ -43,20 +43,26 @@ float4 fs_main(float4 frag_coord: SV_Position): SV_Target {
     rd *= -1;
     rd = mul(view, rd);
 
-    // Sky with haze
-    float3 col = float3(0.3, 0.55, 0.8) * (1.0 - 0.8 * rd.y) * 0.9;
+    float3 col;
 
     // Ground
-    if(rd.y < 0.0)
+    if (rd.y < 0.0) {
         col = float3(0.42, 0.39, 0.36);
+    } else {
+        // Sky with haze
+        col = float3(0.3, 0.55, 0.8) * (1.0 - 0.8 * rd.y) * 0.9;
+
+        // Sun
+        float sundot = clamp(dot(rd.xyz, normalize(float3(-0.8,0.3,-0.3))), 0.0, 1.0);
+        col += 0.25 * float3(1.0, 0.7, 0.4) * pow(sundot, 8.0);
+        col += 0.75 * float3(1.0, 0.8, 0.5) * pow(sundot, 64.0);
+
+        // float v = smoothstep(-.05, 0.02, rd.y);
+        // col = lerp(col, pow(col, float3(0.4545, 0.0, 0.0)), v);
+    }
 
     // Horizon/atmospheric perspective
     col = lerp(col, float3(0.7, 0.75, 0.8), pow(1.0 - max(abs(rd.y), 0.0), 24.0));
-
-    if(rd.y >= -0.05) {
-        float v = smoothstep(-.05, 0.02, rd.y);
-        col = lerp(col, pow(col, float3(0.4545, 0.0, 0.0)), v);
-    }
 
     return float4(col, 1.0);
 }
