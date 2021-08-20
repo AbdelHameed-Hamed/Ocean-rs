@@ -80,8 +80,7 @@ struct SceneData {
 const FRAME_OVERLAP: usize = 2;
 const MAX_OBJECTS: usize = 10_000;
 const OCEAN_PATCH_DIM: usize = 512;
-const L_X: f32 = 1000.0f32;
-const L_Y: f32 = 1000.0f32;
+const L: f32 = 1000.0;
 const TWO_PI: f32 = std::f32::consts::PI * 2.0;
 
 struct FrameData {
@@ -472,8 +471,8 @@ impl VkEngine {
         for i in 0..OCEAN_PATCH_DIM {
             for j in 0..OCEAN_PATCH_DIM {
                 let k = Vec2 {
-                    x: (i as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * TWO_PI / L_X,
-                    y: (j as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * TWO_PI / L_Y,
+                    x: (i as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * TWO_PI / L,
+                    y: (j as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * TWO_PI / L,
                 };
                 let k_length_sqr = if k.length_sqr() < (0.0001 * 0.0001) {
                     0.0001 * 0.0001
@@ -487,8 +486,8 @@ impl VkEngine {
                 let phillips_k = amplitude * b * c;
 
                 let k = Vec2 {
-                    x: -(i as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * TWO_PI / L_X,
-                    y: -(j as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * TWO_PI / L_Y,
+                    x: -(i as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * TWO_PI / L,
+                    y: -(j as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * TWO_PI / L,
                 };
 
                 let c = f32::powi(Vec2::dot(k.normal(), wind_direction), 2);
@@ -1111,8 +1110,7 @@ impl VkEngine {
         let mut scene_data: SceneData = std::mem::zeroed();
         scene_data.view = view;
         scene_data.projection = projection;
-        scene_data.fog_distances.x = L_X;
-        scene_data.fog_distances.y = L_Y;
+        scene_data.fog_distances.x = L;
         scene_data.fog_distances.z = std::time::Instant::now()
             .duration_since(self.start)
             .as_millis() as f32

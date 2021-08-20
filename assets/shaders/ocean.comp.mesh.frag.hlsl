@@ -36,11 +36,11 @@ struct {
 void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     if (flags.flags.x == 0) {
         // Calculate spectrum
-        float2 l = fog_distances.xy;
+        float l = fog_distances.x;
 
-        float2 k = uint2(
-            (int(x) - OCEAN_DIM / 2) * TWO_PI / l.x,
-            (int(z) - OCEAN_DIM / 2) * TWO_PI / l.y
+        float2 k = float2(
+            (int(x) - OCEAN_DIM / 2) * TWO_PI / l,
+            (int(z) - OCEAN_DIM / 2) * TWO_PI / l
         );
         float w_k_t = sqrt(9.81 * length(k)) * fog_distances.z;
 
