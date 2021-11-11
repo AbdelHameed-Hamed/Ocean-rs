@@ -15,7 +15,7 @@ cbuffer SceneData: register(b0, space0) {
 };
 
 StructuredBuffer<Complex> tilde_h_zero: register(t0, space1);
-StructuredBuffer<Complex> tilde_h_zero_conjugate: register(t1, space1);
+StructuredBuffer<Complex> frequencies: register(t1, space1);
 
 RWStructuredBuffer<Complex> ifft_output_input: register(u2, space1);
 RWStructuredBuffer<Complex> ifft_input_output: register(u3, space1);
@@ -40,7 +40,7 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
         uint idx1 = z * OCEAN_DIM + x;
         uint idx2 = (OCEAN_DIM - z) * OCEAN_DIM + (OCEAN_DIM - x);
 
-        float w_k_t = tilde_h_zero_conjugate[idx2].real * fog_distances.z;
+        float w_k_t = frequencies[idx2].real * fog_distances.z;
 
         // Now we compute tilde_h at time t
         pingpong[0][x] = complex_add(
@@ -85,10 +85,11 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
 
     // STEP 3: write output
     uint idx = x * OCEAN_DIM + z;
+    Complex result = pingpong[src][x];
     if (flags.flags.x == 0) {
-        ifft_output_input[idx] = pingpong[src][x];
+        ifft_output_input[idx] = result;
     } else {
-        ifft_input_output[idx] = complex_float_mul(pingpong[src][x], ((x + z) & 1) == 1 ? -1 : 1);
+        ifft_input_output[idx] = complex_float_mul(result, ((x + z) & 1) == 1 ? -1 : 1);
     }
 }
 

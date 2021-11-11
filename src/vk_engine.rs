@@ -457,7 +457,7 @@ impl VkEngine {
 
         let mut tilde_h_zero: Vec<Complex> =
             vec![unsafe { std::mem::zeroed() }; OCEAN_PATCH_DIM * OCEAN_PATCH_DIM];
-        let mut tilde_h_conjugate_zero: Vec<Complex> =
+        let mut frequencies: Vec<Complex> =
             vec![unsafe { std::mem::zeroed() }; OCEAN_PATCH_DIM * OCEAN_PATCH_DIM];
 
         let amplitude = 0.45 * 1e-3;
@@ -500,7 +500,7 @@ impl VkEngine {
                 let idx = i * OCEAN_PATCH_DIM + j;
 
                 tilde_h_zero[idx] = Complex { real: z1, imag: z2 } * h_zero_k;
-                tilde_h_conjugate_zero[idx].real = f32::sqrt(g * k.length());
+                frequencies[idx].real = f32::sqrt(g * k.length());
             }
         }
 
@@ -510,7 +510,7 @@ impl VkEngine {
             1,
             vk::ShaderStageFlags::COMPUTE,
         );
-        let tilda_h_conjugate_binding = vk_initializers::descriptor_set_layout_binding(
+        let frequencies_binding = vk_initializers::descriptor_set_layout_binding(
             vk::DescriptorType::STORAGE_BUFFER,
             1,
             1,
@@ -531,7 +531,7 @@ impl VkEngine {
 
         let bindings = [
             tilda_h_binding,
-            tilda_h_conjugate_binding,
+            frequencies_binding,
             ifft_output_input_binding,
             ifft_input_output_binding,
         ];
@@ -611,12 +611,12 @@ impl VkEngine {
             .buffer_info(&tilda_h_buffer_infos)
             .build();
 
-        let tilda_h_conjugate_size = (size_of::<Complex>() * tilde_h_conjugate_zero.len()) as u64;
+        let frequencies_size = (size_of::<Complex>() * frequencies.len()) as u64;
         let (temp_buffer, temp_buffer_memory) = vk_initializers::create_buffer(
             &instance,
             physical_device,
             &device,
-            tilda_h_conjugate_size,
+            frequencies_size,
             vk::BufferUsageFlags::TRANSFER_SRC,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         );
@@ -626,51 +626,47 @@ impl VkEngine {
                 .map_memory(
                     temp_buffer_memory,
                     0,
-                    tilda_h_conjugate_size,
+                    frequencies_size,
                     vk::MemoryMapFlags::empty(),
                 )
                 .unwrap() as *mut Complex;
-            data_ptr.copy_from_nonoverlapping(
-                tilde_h_conjugate_zero.as_ptr(),
-                tilde_h_conjugate_zero.len(),
-            );
+            data_ptr.copy_from_nonoverlapping(frequencies.as_ptr(), frequencies.len());
             device.unmap_memory(temp_buffer_memory);
         }
 
-        let (tilda_h_conjugate_buffer, tilda_h_conjugate_buffer_memory) =
-            vk_initializers::create_buffer(
-                &instance,
-                physical_device,
-                &device,
-                tilda_h_conjugate_size,
-                vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::STORAGE_BUFFER,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            );
+        let (frequencies_buffer, frequencies_buffer_memory) = vk_initializers::create_buffer(
+            &instance,
+            physical_device,
+            &device,
+            frequencies_size,
+            vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::STORAGE_BUFFER,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        );
 
         vk_initializers::copy_buffer(
             &device,
             command_pool,
             graphics_queue,
             temp_buffer,
-            tilda_h_conjugate_buffer,
-            tilda_h_conjugate_size,
+            frequencies_buffer,
+            frequencies_size,
         );
 
         unsafe {
             vk_initializers::free_buffer_and_memory(&device, temp_buffer, temp_buffer_memory)
         };
 
-        let tilda_h_conjugate_buffer_info = vk::DescriptorBufferInfo::builder()
-            .buffer(tilda_h_conjugate_buffer)
+        let frequencies_buffer_info = vk::DescriptorBufferInfo::builder()
+            .buffer(frequencies_buffer)
             .offset(0)
-            .range(tilda_h_conjugate_size)
+            .range(frequencies_size)
             .build();
-        let tilda_h_conjugate_buffer_infos = [tilda_h_conjugate_buffer_info];
-        let tilda_h_conjugate_set_write = vk::WriteDescriptorSet::builder()
+        let frequencies_buffer_infos = [frequencies_buffer_info];
+        let frequencies_set_write = vk::WriteDescriptorSet::builder()
             .dst_set(tilda_hs_descriptor_set)
             .dst_binding(1)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&tilda_h_conjugate_buffer_infos)
+            .buffer_info(&frequencies_buffer_infos)
             .build();
 
         let ifft_output_input_size = (size_of::<Complex>() * tilde_h_zero.len()) as u64;
@@ -725,7 +721,7 @@ impl VkEngine {
             device.update_descriptor_sets(
                 &[
                     tilda_h_set_write,
-                    tilda_h_conjugate_set_write,
+                    frequencies_set_write,
                     ifft_output_input_set_write,
                     ifft_input_output_set_write,
                 ],
@@ -937,8 +933,8 @@ impl VkEngine {
                         buffer_memory: tilda_h_buffer_memory,
                     },
                     VkBuffer {
-                        buffer: tilda_h_conjugate_buffer,
-                        buffer_memory: tilda_h_conjugate_buffer_memory,
+                        buffer: frequencies_buffer,
+                        buffer_memory: frequencies_buffer_memory,
                     },
                     VkBuffer {
                         buffer: ifft_output_input_buffer,
@@ -1084,7 +1080,6 @@ impl VkEngine {
             .begin_command_buffer(frame_data.command_buffer, &command_buffer_begin_info)
             .unwrap();
 
-        let frame = self.frame_count as f32 / 120.0f32;
         let view = Mat4::look_at_rh(
             self.camera.pos,
             self.camera.pos + self.camera.front,
