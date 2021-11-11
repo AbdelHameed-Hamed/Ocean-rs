@@ -37,19 +37,15 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     if (flags.flags.x == 0) {
         // Calculate spectrum
         float l = fog_distances.x;
+        uint idx1 = z * OCEAN_DIM + x;
+        uint idx2 = (OCEAN_DIM - z) * OCEAN_DIM + (OCEAN_DIM - x);
 
-        float2 k = float2(
-            (int(x) - OCEAN_DIM / 2) * TWO_PI / l,
-            (int(z) - OCEAN_DIM / 2) * TWO_PI / l
-        );
-        float w_k_t = sqrt(9.81 * length(k)) * fog_distances.z;
-
-        uint idx = z * OCEAN_DIM + x;
+        float w_k_t = tilde_h_zero_conjugate[idx2].real * fog_distances.z;
 
         // Now we compute tilde_h at time t
         pingpong[0][x] = complex_add(
-            complex_mul(tilde_h_zero[idx], complex_exp(w_k_t)),
-            complex_mul(tilde_h_zero_conjugate[idx], complex_exp(-w_k_t))
+            complex_mul(tilde_h_zero[idx1], complex_exp(w_k_t)),
+            complex_mul(tilde_h_zero[idx2], complex_exp(-w_k_t))
         );
     }
 
@@ -90,12 +86,9 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     // STEP 3: write output
     uint idx = x * OCEAN_DIM + z;
     if (flags.flags.x == 0) {
-        ifft_output_input[idx] = complex_float_mul(pingpong[src][x], (x % 2 ? -1 : 1));
+        ifft_output_input[idx] = pingpong[src][x];
     } else {
-        ifft_input_output[idx] = complex_float_mul(
-            pingpong[src][x],
-            OCEAN_DIM_RECIPROCAL * OCEAN_DIM_RECIPROCAL * (x % 2 ? -1 : 1)
-        );
+        ifft_input_output[idx] = complex_float_mul(pingpong[src][x], ((x + z) & 1) == 1 ? -1 : 1);
     }
 }
 
@@ -144,7 +137,7 @@ void ms_main(
             // Transform the vertex and register it
             out_verts[vert_idx].pos = mul(
                 mul(projection, view),
-                float4(global_x, ifft_input_output[global_idx].real * 100, global_z, 1.0)
+                float4(global_x, ifft_input_output[global_idx].real, global_z, 1.0)
             );
 
             // Now figure which quad you represent and register its triangles

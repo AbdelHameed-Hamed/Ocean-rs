@@ -80,7 +80,7 @@ struct SceneData {
 const FRAME_OVERLAP: usize = 2;
 const MAX_OBJECTS: usize = 10_000;
 const OCEAN_PATCH_DIM: usize = 512;
-const L: f32 = 1000.0;
+const L: f32 = 20.0;
 const TWO_PI: f32 = std::f32::consts::PI * 2.0;
 
 struct FrameData {
@@ -460,58 +460,47 @@ impl VkEngine {
         let mut tilde_h_conjugate_zero: Vec<Complex> =
             vec![unsafe { std::mem::zeroed() }; OCEAN_PATCH_DIM * OCEAN_PATCH_DIM];
 
-        let amplitude = 20.0;
-        let wind_speed = 31.0;
-        let wind_direction = Vec2 { x: 1.0, y: 0.0 };
+        let amplitude = 0.45 * 1e-3;
+        let wind_speed = 6.5;
+        let wind_direction = Vec2 { x: -0.4, y: -0.9 };
         let g = 9.81;
         let l = wind_speed * wind_speed / g;
+        let l_minor_waves = l / 1000.0;
+        let start = OCEAN_PATCH_DIM as f32 / 2.0;
 
         let mut rnd_state = 1;
 
         for i in 0..OCEAN_PATCH_DIM {
             for j in 0..OCEAN_PATCH_DIM {
                 let k = Vec2 {
-                    x: (i as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * TWO_PI / L,
-                    y: (j as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * TWO_PI / L,
+                    x: (start - j as f32) * TWO_PI / L,
+                    y: (start - i as f32) * TWO_PI / L,
                 };
-                let k_length_sqr = if k.length_sqr() < (0.0001 * 0.0001) {
-                    0.0001 * 0.0001
-                } else {
-                    k.length_sqr()
-                };
+                let k_length_sqr = k.length_sqr();
 
-                let b = f32::exp(-1.0 / (k_length_sqr * l * l)) / (k_length_sqr * k_length_sqr);
+                let b = if k.x != 0.0 || k.y != 0.0 {
+                    f32::exp(-1.0 / (k_length_sqr * l * l)) / (k_length_sqr * k_length_sqr)
+                } else {
+                    0.0
+                };
                 let c = f32::powi(Vec2::dot(k.normal(), wind_direction.normal()), 2);
 
-                let phillips_k = amplitude * b * c;
-
-                let k = Vec2 {
-                    x: -(i as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * TWO_PI / L,
-                    y: -(j as f32 - (OCEAN_PATCH_DIM as f32 / 2.0)) * TWO_PI / L,
-                };
-
-                let c = f32::powi(Vec2::dot(k.normal(), wind_direction), 2);
-
-                let phillips_minus_k = amplitude * b * c;
+                let mut phillips_k = amplitude * b * c;
+                if Vec2::dot(k, wind_direction.normal()) < 0.0 {
+                    phillips_k *= 0.07;
+                }
+                phillips_k *= f32::exp(-k_length_sqr * l_minor_waves * l_minor_waves);
 
                 let h_zero_k = f32::sqrt(phillips_k) / std::f32::consts::SQRT_2;
-                let h_zero_minus_k = f32::sqrt(phillips_minus_k) / std::f32::consts::SQRT_2;
 
                 let (u1, u2) = (xorshift32(&mut rnd_state), xorshift32(&mut rnd_state));
                 let (z1, z2) =
                     box_muller_rng(u1 as f32 / u32::MAX as f32, u2 as f32 / u32::MAX as f32);
 
-                let temp = Complex { real: z1, imag: z2 } * h_zero_k;
-                tilde_h_zero[i * OCEAN_PATCH_DIM + j] = temp;
+                let idx = i * OCEAN_PATCH_DIM + j;
 
-                let (u1, u2) = (xorshift32(&mut rnd_state), xorshift32(&mut rnd_state));
-                let (z1, z2) =
-                    box_muller_rng(u1 as f32 / u32::MAX as f32, u2 as f32 / u32::MAX as f32);
-
-                tilde_h_conjugate_zero[i * OCEAN_PATCH_DIM + j] = Complex {
-                    real: z1,
-                    imag: -z2,
-                } * h_zero_minus_k;
+                tilde_h_zero[idx] = Complex { real: z1, imag: z2 } * h_zero_k;
+                tilde_h_conjugate_zero[idx].real = f32::sqrt(g * k.length());
             }
         }
 
