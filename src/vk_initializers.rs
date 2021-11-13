@@ -501,6 +501,51 @@ pub fn color_blend_attachment_state() -> vk::PipelineColorBlendAttachmentState {
         .build();
 }
 
+fn begin_single_time_command(device: &Device, command_pool: vk::CommandPool) -> vk::CommandBuffer {
+    let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::builder()
+        .command_pool(command_pool)
+        .command_buffer_count(1);
+    let command_buffer = unsafe {
+        device
+            .allocate_command_buffers(&command_buffer_allocate_info)
+            .unwrap()[0]
+    };
+
+    let command_buffer_begin_info =
+        vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+    unsafe {
+        device
+            .begin_command_buffer(command_buffer, &command_buffer_begin_info)
+            .unwrap()
+    };
+
+    return command_buffer;
+}
+
+fn end_single_time_command(
+    device: &Device,
+    command_pool: vk::CommandPool,
+    graphics_queue: vk::Queue,
+    command_buffer: vk::CommandBuffer,
+) {
+    unsafe {
+        device.end_command_buffer(command_buffer).unwrap();
+    };
+
+    let submit_info = vk::SubmitInfo::builder()
+        .command_buffers(&[command_buffer])
+        .build();
+    let submit_infos = [submit_info];
+
+    unsafe {
+        device
+            .queue_submit(graphics_queue, &submit_infos, vk::Fence::null())
+            .unwrap();
+        device.queue_wait_idle(graphics_queue).unwrap();
+        device.free_command_buffers(command_pool, &[command_buffer]);
+    };
+}
+
 pub fn create_buffer(
     instance: &Instance,
     physical_device: vk::PhysicalDevice,
@@ -551,22 +596,7 @@ pub fn copy_buffer(
     dst: vk::Buffer,
     size: vk::DeviceSize,
 ) {
-    let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::builder()
-        .command_pool(command_pool)
-        .command_buffer_count(1);
-    let command_buffer = unsafe {
-        device
-            .allocate_command_buffers(&command_buffer_allocate_info)
-            .unwrap()[0]
-    };
-
-    let command_buffer_begin_info =
-        vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-    unsafe {
-        device
-            .begin_command_buffer(command_buffer, &command_buffer_begin_info)
-            .unwrap()
-    };
+    let command_buffer = begin_single_time_command(device, command_pool);
 
     let buffer_copy_region = vk::BufferCopy::builder()
         .src_offset(0)
@@ -576,21 +606,9 @@ pub fn copy_buffer(
     let buffer_copy_regions = [buffer_copy_region];
     unsafe {
         device.cmd_copy_buffer(command_buffer, src, dst, &buffer_copy_regions);
-        device.end_command_buffer(command_buffer).unwrap();
     };
 
-    let submit_info = vk::SubmitInfo::builder()
-        .command_buffers(&[command_buffer])
-        .build();
-    let submit_infos = [submit_info];
-
-    unsafe {
-        device
-            .queue_submit(graphics_queue, &submit_infos, vk::Fence::null())
-            .unwrap();
-        device.queue_wait_idle(graphics_queue).unwrap();
-        device.free_command_buffers(command_pool, &[command_buffer]);
-    };
+    end_single_time_command(device, command_pool, graphics_queue, command_buffer);
 }
 
 pub unsafe fn free_buffer_and_memory(
@@ -656,7 +674,91 @@ pub fn create_image(
     return (image, image_memory);
 }
 
-pub fn create_imageview_create_info(
+pub fn transition_image_layout(
+    device: &Device,
+    command_pool: vk::CommandPool,
+    graphics_queue: vk::Queue,
+    image: vk::Image,
+    old_layout: vk::ImageLayout,
+    new_layout: vk::ImageLayout,
+) {
+    let command_buffer = begin_single_time_command(device, command_pool);
+
+    let src_access = match old_layout {
+        vk::ImageLayout::UNDEFINED => vk::AccessFlags::empty(),
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL => vk::AccessFlags::TRANSFER_WRITE,
+        _ => panic!("Dunno what old_layout this is"),
+    };
+    let dst_access = match new_layout {
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL => vk::AccessFlags::TRANSFER_WRITE,
+        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => vk::AccessFlags::SHADER_READ,
+        _ => panic!("Dunno what new_layout this is"),
+    };
+
+    let barrier = vk::ImageMemoryBarrier::builder()
+        .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        })
+        .src_access_mask(src_access)
+        .dst_access_mask(dst_access)
+        .old_layout(old_layout)
+        .new_layout(new_layout)
+        .image(image)
+        .build();
+    let barriers = [barrier];
+    unsafe {
+        device.cmd_pipeline_barrier(
+            command_buffer,
+            vk::PipelineStageFlags::TOP_OF_PIPE | vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::TRANSFER | vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &barriers,
+        );
+    };
+
+    end_single_time_command(device, command_pool, graphics_queue, command_buffer);
+}
+
+pub fn copy_buffer_to_image(
+    device: &Device,
+    command_pool: vk::CommandPool,
+    graphics_queue: vk::Queue,
+    src: vk::Buffer,
+    dst: vk::Image,
+    size: vk::Extent3D,
+) {
+    let command_buffer = begin_single_time_command(device, command_pool);
+
+    let region = vk::BufferImageCopy::builder()
+        .image_subresource(vk::ImageSubresourceLayers {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            mip_level: 0,
+            base_array_layer: 0,
+            layer_count: 1,
+        })
+        .image_extent(size)
+        .build();
+    let regions = [region];
+    unsafe {
+        device.cmd_copy_buffer_to_image(
+            command_buffer,
+            src,
+            dst,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &regions,
+        );
+    };
+
+    end_single_time_command(device, command_pool, graphics_queue, command_buffer);
+}
+
+pub fn create_image_view_create_info(
     format: vk::Format,
     image: vk::Image,
     aspect_flags: vk::ImageAspectFlags,

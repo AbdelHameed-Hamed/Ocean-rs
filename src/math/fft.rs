@@ -122,15 +122,12 @@ fn bit_reverse(input: &mut Vec<Complex>, offset: usize, length: usize) {
 fn cooley_tukey_1d(input: &mut Vec<Complex>, direction: f32, offset: usize, length: usize) {
     bit_reverse(input, offset, length);
 
-    let (mut W, mut even, mut odd): (Complex, Complex, Complex);
-
     // 1. stage (N = length = 8) take log => 3
     let mut k = 2;
     while k <= length {
         // 2. Do fft_1d for each stage
         // each stage is divided into (N / k) groups
-        let mut j = 0;
-        while j < length {
+        for j in (0..length).step_by(k) {
             // 3. Because of symmetry we do it together
             //  stage1:  stage2:       stage3:
             //  0, 1     0, 2 & 1, 3
@@ -145,7 +142,7 @@ fn cooley_tukey_1d(input: &mut Vec<Complex>, direction: f32, offset: usize, leng
                 // 1- M = (N / 4) = 2
                 // 2- M = (N / 2) = 4
                 // 3- M = (N) = 8
-                W = Complex {
+                let w = Complex {
                     real: f32::cos((2.0 * PI * i as f32) / k as f32),
                     imag: -direction * f32::sin((2.0 * PI * i as f32) / k as f32),
                 };
@@ -153,16 +150,14 @@ fn cooley_tukey_1d(input: &mut Vec<Complex>, direction: f32, offset: usize, leng
 
                 // Even = DFT of even indexed part
                 // Odd = W * DFT of odd indexed part
-                even = input[i + offset];
-                odd = W * input[idx + offset];
+                let even = input[i + offset];
+                let odd = w * input[idx + offset];
 
                 // X[k]     = Even + W * Odd
                 // X[k+N/2] = even - W * Odd
                 input[i + offset] = even + odd;
                 input[idx + offset] = even - odd;
             }
-
-            j += k;
         }
 
         k <<= 1;
