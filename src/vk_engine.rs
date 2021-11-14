@@ -60,7 +60,7 @@ struct Mesh {
 struct MeshShaderData {
     descriptor_set_layout: vk::DescriptorSetLayout,
     descriptor_set: vk::DescriptorSet,
-    buffers: [VkBuffer; 3],
+    buffers: [VkBuffer; 2],
     meshlet_count: u32,
 }
 
@@ -470,7 +470,7 @@ impl VkEngine {
 
         let mut tilde_h_zero: Vec<Complex> =
             vec![unsafe { std::mem::zeroed() }; (OCEAN_PATCH_DIM + 1) * (OCEAN_PATCH_DIM + 1)];
-        let mut frequencies: Vec<Complex> =
+        let mut frequencies: Vec<f32> =
             vec![unsafe { std::mem::zeroed() }; (OCEAN_PATCH_DIM + 1) * (OCEAN_PATCH_DIM + 1)];
 
         let amplitude = 0.45 * 1e-3;
@@ -515,7 +515,7 @@ impl VkEngine {
                 let idx = i * (OCEAN_PATCH_DIM + 1) + j;
 
                 tilde_h_zero[idx] = Complex { real: r1, imag: r2 } * h_zero_k;
-                frequencies[idx].real = f32::sqrt(g * k.length());
+                frequencies[idx] = f32::sqrt(g * k.length());
             }
         }
 
@@ -526,7 +526,7 @@ impl VkEngine {
             vk::ShaderStageFlags::COMPUTE,
         );
         let frequencies_binding = vk_initializers::descriptor_set_layout_binding(
-            vk::DescriptorType::STORAGE_BUFFER,
+            vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             1,
             1,
             vk::ShaderStageFlags::COMPUTE,
@@ -593,104 +593,25 @@ impl VkEngine {
 
         let mut textures = HashMap::<String, VkTexture>::new();
 
-        let tilda_h_img_info = vk_initializers::create_image_create_info(
-            vk::Format::R32G32_SFLOAT,
-            vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-            vk::Extent3D {
-                width: (OCEAN_PATCH_DIM + 1) as u32,
-                height: (OCEAN_PATCH_DIM + 1) as u32,
-                depth: 1,
-            },
-        );
-        let (tilda_h_img, tilda_h_memory) = vk_initializers::create_image(
+        let tilda_h_extent = vk::Extent3D {
+            width: (OCEAN_PATCH_DIM + 1) as u32,
+            height: (OCEAN_PATCH_DIM + 1) as u32,
+            depth: 1,
+        };
+        let tilda_h_info = Self::add_texture(
             &instance,
             physical_device,
             &device,
-            tilda_h_img_info,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        );
-        let tilda_h_img = VkImage {
-            image: tilda_h_img,
-            image_memory: tilda_h_memory,
-        };
-        vk_initializers::transition_image_layout(
-            &device,
             command_pool,
             graphics_queue,
-            tilda_h_img.image,
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-        );
-        vk_initializers::copy_buffer_to_image(
-            &device,
-            command_pool,
-            graphics_queue,
-            temp_buffer,
-            tilda_h_img.image,
-            vk::Extent3D {
-                width: (OCEAN_PATCH_DIM + 1) as u32,
-                height: (OCEAN_PATCH_DIM + 1) as u32,
-                depth: 1,
-            },
-        );
-        unsafe {
-            vk_initializers::free_buffer_and_memory(&device, temp_buffer, temp_buffer_memory)
-        };
-        vk_initializers::transition_image_layout(
-            &device,
-            command_pool,
-            graphics_queue,
-            tilda_h_img.image,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        );
-
-        let tilda_h_image_view_info = vk_initializers::create_image_view_create_info(
+            tilda_h_extent,
             vk::Format::R32G32_SFLOAT,
-            tilda_h_img.image,
-            vk::ImageAspectFlags::COLOR,
+            temp_buffer,
+            temp_buffer_memory,
+            "tilda_h",
+            &mut textures,
         );
-        let tilda_h_image_view = unsafe {
-            device
-                .create_image_view(&tilda_h_image_view_info, None)
-                .unwrap()
-        };
-
-        let tilda_h_sampler_info = vk::SamplerCreateInfo {
-            mag_filter: vk::Filter::NEAREST,
-            min_filter: vk::Filter::NEAREST,
-            address_mode_u: vk::SamplerAddressMode::CLAMP_TO_BORDER,
-            address_mode_v: vk::SamplerAddressMode::CLAMP_TO_BORDER,
-            address_mode_w: vk::SamplerAddressMode::CLAMP_TO_BORDER,
-            border_color: vk::BorderColor::FLOAT_OPAQUE_WHITE,
-            unnormalized_coordinates: vk::TRUE,
-            compare_enable: vk::FALSE,
-            compare_op: vk::CompareOp::NEVER,
-            mipmap_mode: vk::SamplerMipmapMode::NEAREST,
-            ..Default::default()
-        };
-        let tilda_h_sampler =
-            unsafe { device.create_sampler(&tilda_h_sampler_info, None).unwrap() };
-
-        let tilda_h_texture = VkTexture {
-            image: tilda_h_img,
-            image_view: tilda_h_image_view,
-            sampler: tilda_h_sampler,
-        };
-        textures.insert("tilda_h".to_string(), tilda_h_texture);
-
-        let tilda_h_image_info = vk::DescriptorImageInfo {
-            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            ..Default::default()
-        };
-
-        let tilda_h_texture_info = vk::DescriptorImageInfo {
-            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            image_view: textures["tilda_h"].image_view,
-            sampler: textures["tilda_h"].sampler,
-            ..Default::default()
-        };
-        let infos = [tilda_h_texture_info];
+        let infos = [tilda_h_info];
         let tilda_h_set_write = vk::WriteDescriptorSet::builder()
             .dst_set(tilda_hs_descriptor_set)
             .dst_binding(0)
@@ -698,7 +619,7 @@ impl VkEngine {
             .image_info(&infos)
             .build();
 
-        let frequencies_size = (size_of::<Complex>() * frequencies.len()) as u64;
+        let frequencies_size = (size_of::<f32>() * frequencies.len()) as u64;
         let (temp_buffer, temp_buffer_memory) = vk_initializers::create_buffer(
             &instance,
             physical_device,
@@ -716,44 +637,30 @@ impl VkEngine {
                     frequencies_size,
                     vk::MemoryMapFlags::empty(),
                 )
-                .unwrap() as *mut Complex;
+                .unwrap() as *mut f32;
             data_ptr.copy_from_nonoverlapping(frequencies.as_ptr(), frequencies.len());
             device.unmap_memory(temp_buffer_memory);
         }
 
-        let (frequencies_buffer, frequencies_buffer_memory) = vk_initializers::create_buffer(
+        let frequencies_info = Self::add_texture(
             &instance,
             physical_device,
             &device,
-            frequencies_size,
-            vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::STORAGE_BUFFER,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        );
-
-        vk_initializers::copy_buffer(
-            &device,
             command_pool,
             graphics_queue,
+            tilda_h_extent,
+            vk::Format::R32_SFLOAT,
             temp_buffer,
-            frequencies_buffer,
-            frequencies_size,
+            temp_buffer_memory,
+            "frequencies",
+            &mut textures,
         );
-
-        unsafe {
-            vk_initializers::free_buffer_and_memory(&device, temp_buffer, temp_buffer_memory)
-        };
-
-        let frequencies_buffer_info = vk::DescriptorBufferInfo::builder()
-            .buffer(frequencies_buffer)
-            .offset(0)
-            .range(frequencies_size)
-            .build();
-        let frequencies_buffer_infos = [frequencies_buffer_info];
+        let infos = [frequencies_info];
         let frequencies_set_write = vk::WriteDescriptorSet::builder()
             .dst_set(tilda_hs_descriptor_set)
             .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&frequencies_buffer_infos)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&infos)
             .build();
 
         let ifft_output_input_size = (size_of::<Complex>() * tilde_h_zero.len()) as u64;
@@ -1016,10 +923,6 @@ impl VkEngine {
                 descriptor_set: tilda_hs_descriptor_set,
                 buffers: [
                     VkBuffer {
-                        buffer: frequencies_buffer,
-                        buffer_memory: frequencies_buffer_memory,
-                    },
-                    VkBuffer {
                         buffer: ifft_output_input_buffer,
                         buffer_memory: ifft_output_input_buffer_memory,
                     },
@@ -1051,6 +954,105 @@ impl VkEngine {
         };
 
         return aligned_size;
+    }
+
+    fn add_texture(
+        instance: &Instance,
+        physical_device: vk::PhysicalDevice,
+        device: &Device,
+        command_pool: vk::CommandPool,
+        graphics_queue: vk::Queue,
+        extent: vk::Extent3D,
+        format: vk::Format,
+        temp_buffer: vk::Buffer,
+        temp_buffer_memory: vk::DeviceMemory,
+        name: &str,
+        textures: &mut HashMap<String, VkTexture>,
+    ) -> vk::DescriptorImageInfo {
+        let texture_img_info = vk_initializers::create_image_create_info(
+            format,
+            vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            extent,
+        );
+        let (texture_img, texture_memory) = vk_initializers::create_image(
+            &instance,
+            physical_device,
+            &device,
+            texture_img_info,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        );
+        let texture_img = VkImage {
+            image: texture_img,
+            image_memory: texture_memory,
+        };
+        vk_initializers::transition_image_layout(
+            &device,
+            command_pool,
+            graphics_queue,
+            texture_img.image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        );
+        vk_initializers::copy_buffer_to_image(
+            &device,
+            command_pool,
+            graphics_queue,
+            temp_buffer,
+            texture_img.image,
+            extent,
+        );
+        unsafe {
+            vk_initializers::free_buffer_and_memory(&device, temp_buffer, temp_buffer_memory)
+        };
+        vk_initializers::transition_image_layout(
+            &device,
+            command_pool,
+            graphics_queue,
+            texture_img.image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+
+        let texture_image_view_info = vk_initializers::create_image_view_create_info(
+            format,
+            texture_img.image,
+            vk::ImageAspectFlags::COLOR,
+        );
+        let texture_image_view = unsafe {
+            device
+                .create_image_view(&texture_image_view_info, None)
+                .unwrap()
+        };
+
+        let texture_sampler_info = vk::SamplerCreateInfo {
+            mag_filter: vk::Filter::NEAREST,
+            min_filter: vk::Filter::NEAREST,
+            address_mode_u: vk::SamplerAddressMode::CLAMP_TO_BORDER,
+            address_mode_v: vk::SamplerAddressMode::CLAMP_TO_BORDER,
+            address_mode_w: vk::SamplerAddressMode::CLAMP_TO_BORDER,
+            border_color: vk::BorderColor::FLOAT_OPAQUE_WHITE,
+            unnormalized_coordinates: vk::TRUE,
+            compare_enable: vk::FALSE,
+            compare_op: vk::CompareOp::NEVER,
+            mipmap_mode: vk::SamplerMipmapMode::NEAREST,
+            ..Default::default()
+        };
+        let texture_sampler =
+            unsafe { device.create_sampler(&texture_sampler_info, None).unwrap() };
+
+        let texture = VkTexture {
+            image: texture_img,
+            image_view: texture_image_view,
+            sampler: texture_sampler,
+        };
+        textures.insert(name.to_string(), texture);
+
+        return vk::DescriptorImageInfo {
+            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            image_view: textures[name].image_view,
+            sampler: textures[name].sampler,
+            ..Default::default()
+        };
     }
 
     pub unsafe fn cleanup(&mut self) {

@@ -16,7 +16,8 @@ cbuffer SceneData: register(b0, space0) {
 
 Texture2D<float2> tilde_h_zero: register(t0, space1);
 SamplerState tilde_h_zero_sampler: register(s0, space1);
-StructuredBuffer<Complex> frequencies: register(t1, space1);
+Texture2D<float> frequencies: register(t1, space1);
+SamplerState frequencies_sampler: register(s1, space1);
 
 RWStructuredBuffer<Complex> ifft_output_input: register(u2, space1);
 RWStructuredBuffer<Complex> ifft_input_output: register(u3, space1);
@@ -41,7 +42,7 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
         uint2 loc1 = uint2(x, z);
         uint2 loc2 = uint2((OCEAN_DIM - x), (OCEAN_DIM - z));
 
-        float w_k_t = frequencies[z * OCEAN_DIM + x].real * fog_distances.z;
+        float w_k_t = frequencies.SampleLevel(frequencies_sampler, loc1, 0) * fog_distances.z;
 
         float2 temp1 = tilde_h_zero.SampleLevel(tilde_h_zero_sampler, loc1, 0);
         float2 temp2 = tilde_h_zero.SampleLevel(tilde_h_zero_sampler, loc2, 0);
