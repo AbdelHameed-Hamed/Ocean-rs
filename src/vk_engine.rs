@@ -1,9 +1,10 @@
 extern crate ash;
+extern crate rand;
+extern crate rand_distr;
 extern crate sdl2;
 
 use crate::math::fft::Complex;
 use crate::math::lin_alg::{Mat4, Vec2, Vec3, Vec4};
-use crate::math::rand::{box_muller_rng, xorshift32};
 use crate::vk_initializers;
 
 use ash::extensions::{
@@ -13,6 +14,7 @@ use ash::extensions::{
 };
 use ash::version::{DeviceV1_0, InstanceV1_0, InstanceV1_1};
 use ash::{vk, Device, Instance};
+use rand_distr::{Distribution, Normal};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::video::Window;
@@ -27,6 +29,12 @@ struct VkBuffer {
 struct VkImage {
     image: vk::Image,
     image_memory: vk::DeviceMemory,
+}
+
+struct VkTexture {
+    image: VkImage,
+    image_view: vk::ImageView,
+    sampler: vk::Sampler,
 }
 
 #[repr(align(16))]
@@ -52,7 +60,7 @@ struct Mesh {
 struct MeshShaderData {
     descriptor_set_layout: vk::DescriptorSetLayout,
     descriptor_set: vk::DescriptorSet,
-    buffers: [VkBuffer; 4],
+    buffers: [VkBuffer; 3],
     meshlet_count: u32,
 }
 
@@ -232,6 +240,7 @@ pub struct VkEngine {
     mesh_shader: MeshShader,
     compute_pipelines: Vec<vk::Pipeline>,
     start: std::time::Instant,
+    textures: HashMap<String, VkTexture>,
 }
 
 impl VkEngine {
@@ -307,7 +316,7 @@ impl VkEngine {
             image_memory: depth_image_memory,
         };
 
-        let depth_image_view_create_info = vk_initializers::create_imageview_create_info(
+        let depth_image_view_create_info = vk_initializers::create_image_view_create_info(
             depth_image_format,
             depth_image.image,
             vk::ImageAspectFlags::DEPTH,
@@ -370,6 +379,10 @@ impl VkEngine {
                 .build(),
             vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(10)
+                .build(),
+            vk::DescriptorPoolSize::builder()
+                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(10)
                 .build(),
         ];
@@ -456,9 +469,9 @@ impl VkEngine {
         }
 
         let mut tilde_h_zero: Vec<Complex> =
-            vec![unsafe { std::mem::zeroed() }; OCEAN_PATCH_DIM * OCEAN_PATCH_DIM];
+            vec![unsafe { std::mem::zeroed() }; (OCEAN_PATCH_DIM + 1) * (OCEAN_PATCH_DIM + 1)];
         let mut frequencies: Vec<Complex> =
-            vec![unsafe { std::mem::zeroed() }; OCEAN_PATCH_DIM * OCEAN_PATCH_DIM];
+            vec![unsafe { std::mem::zeroed() }; (OCEAN_PATCH_DIM + 1) * (OCEAN_PATCH_DIM + 1)];
 
         let amplitude = 0.45 * 1e-3;
         let wind_speed = 6.5;
@@ -468,44 +481,46 @@ impl VkEngine {
         let l_minor_waves = l / 1000.0;
         let start = OCEAN_PATCH_DIM as f32 / 2.0;
 
-        let mut rnd_state = 1;
+        let normal = Normal::new(0.0, 1.0).unwrap();
 
-        for i in 0..OCEAN_PATCH_DIM {
-            for j in 0..OCEAN_PATCH_DIM {
+        for i in 0..=OCEAN_PATCH_DIM {
+            for j in 0..=OCEAN_PATCH_DIM {
                 let k = Vec2 {
-                    x: (start - j as f32) * TWO_PI / L,
-                    y: (start - i as f32) * TWO_PI / L,
+                    x: TWO_PI * (start - j as f32) / L,
+                    y: TWO_PI * (start - i as f32) / L,
                 };
-                let k_length_sqr = k.length_sqr();
+                let k_2 = k.length_sqr();
+                let k_dot_w = Vec2::dot(k, wind_direction.normal());
 
                 let b = if k.x != 0.0 || k.y != 0.0 {
-                    f32::exp(-1.0 / (k_length_sqr * l * l)) / (k_length_sqr * k_length_sqr)
+                    f32::exp(-1.0 / (k_2 * l * l)) / (k_2 * k_2 * k_2)
                 } else {
                     0.0
                 };
-                let c = f32::powi(Vec2::dot(k.normal(), wind_direction.normal()), 2);
+                let c = f32::powi(k_dot_w, 2);
 
                 let mut phillips_k = amplitude * b * c;
-                if Vec2::dot(k, wind_direction.normal()) < 0.0 {
+                if k_dot_w < 0.0 {
                     phillips_k *= 0.07;
                 }
-                phillips_k *= f32::exp(-k_length_sqr * l_minor_waves * l_minor_waves);
+                phillips_k *= f32::exp(-k_2 * l_minor_waves * l_minor_waves);
 
-                let h_zero_k = f32::sqrt(phillips_k) / std::f32::consts::SQRT_2;
+                let h_zero_k = f32::sqrt(phillips_k) * std::f32::consts::FRAC_1_SQRT_2;
 
-                let (u1, u2) = (xorshift32(&mut rnd_state), xorshift32(&mut rnd_state));
-                let (z1, z2) =
-                    box_muller_rng(u1 as f32 / u32::MAX as f32, u2 as f32 / u32::MAX as f32);
+                let (r1, r2) = (
+                    normal.sample(&mut rand::thread_rng()),
+                    normal.sample(&mut rand::thread_rng()),
+                );
 
-                let idx = i * OCEAN_PATCH_DIM + j;
+                let idx = i * (OCEAN_PATCH_DIM + 1) + j;
 
-                tilde_h_zero[idx] = Complex { real: z1, imag: z2 } * h_zero_k;
+                tilde_h_zero[idx] = Complex { real: r1, imag: r2 } * h_zero_k;
                 frequencies[idx].real = f32::sqrt(g * k.length());
             }
         }
 
         let tilda_h_binding = vk_initializers::descriptor_set_layout_binding(
-            vk::DescriptorType::STORAGE_BUFFER,
+            vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             0,
             1,
             vk::ShaderStageFlags::COMPUTE,
@@ -576,39 +591,111 @@ impl VkEngine {
             device.unmap_memory(temp_buffer_memory);
         }
 
-        let (tilda_h_buffer, tilda_h_buffer_memory) = vk_initializers::create_buffer(
+        let mut textures = HashMap::<String, VkTexture>::new();
+
+        let tilda_h_img_info = vk_initializers::create_image_create_info(
+            vk::Format::R32G32_SFLOAT,
+            vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            vk::Extent3D {
+                width: (OCEAN_PATCH_DIM + 1) as u32,
+                height: (OCEAN_PATCH_DIM + 1) as u32,
+                depth: 1,
+            },
+        );
+        let (tilda_h_img, tilda_h_memory) = vk_initializers::create_image(
             &instance,
             physical_device,
             &device,
-            tilda_h_size,
-            vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::STORAGE_BUFFER,
+            tilda_h_img_info,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         );
-
-        vk_initializers::copy_buffer(
+        let tilda_h_img = VkImage {
+            image: tilda_h_img,
+            image_memory: tilda_h_memory,
+        };
+        vk_initializers::transition_image_layout(
+            &device,
+            command_pool,
+            graphics_queue,
+            tilda_h_img.image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        );
+        vk_initializers::copy_buffer_to_image(
             &device,
             command_pool,
             graphics_queue,
             temp_buffer,
-            tilda_h_buffer,
-            tilda_h_size,
+            tilda_h_img.image,
+            vk::Extent3D {
+                width: (OCEAN_PATCH_DIM + 1) as u32,
+                height: (OCEAN_PATCH_DIM + 1) as u32,
+                depth: 1,
+            },
         );
-
         unsafe {
             vk_initializers::free_buffer_and_memory(&device, temp_buffer, temp_buffer_memory)
         };
+        vk_initializers::transition_image_layout(
+            &device,
+            command_pool,
+            graphics_queue,
+            tilda_h_img.image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
 
-        let tilda_h_buffer_info = vk::DescriptorBufferInfo::builder()
-            .buffer(tilda_h_buffer)
-            .offset(0)
-            .range(tilda_h_size)
-            .build();
-        let tilda_h_buffer_infos = [tilda_h_buffer_info];
+        let tilda_h_image_view_info = vk_initializers::create_image_view_create_info(
+            vk::Format::R32G32_SFLOAT,
+            tilda_h_img.image,
+            vk::ImageAspectFlags::COLOR,
+        );
+        let tilda_h_image_view = unsafe {
+            device
+                .create_image_view(&tilda_h_image_view_info, None)
+                .unwrap()
+        };
+
+        let tilda_h_sampler_info = vk::SamplerCreateInfo {
+            mag_filter: vk::Filter::NEAREST,
+            min_filter: vk::Filter::NEAREST,
+            address_mode_u: vk::SamplerAddressMode::CLAMP_TO_BORDER,
+            address_mode_v: vk::SamplerAddressMode::CLAMP_TO_BORDER,
+            address_mode_w: vk::SamplerAddressMode::CLAMP_TO_BORDER,
+            border_color: vk::BorderColor::FLOAT_OPAQUE_WHITE,
+            unnormalized_coordinates: vk::TRUE,
+            compare_enable: vk::FALSE,
+            compare_op: vk::CompareOp::NEVER,
+            mipmap_mode: vk::SamplerMipmapMode::NEAREST,
+            ..Default::default()
+        };
+        let tilda_h_sampler =
+            unsafe { device.create_sampler(&tilda_h_sampler_info, None).unwrap() };
+
+        let tilda_h_texture = VkTexture {
+            image: tilda_h_img,
+            image_view: tilda_h_image_view,
+            sampler: tilda_h_sampler,
+        };
+        textures.insert("tilda_h".to_string(), tilda_h_texture);
+
+        let tilda_h_image_info = vk::DescriptorImageInfo {
+            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            ..Default::default()
+        };
+
+        let tilda_h_texture_info = vk::DescriptorImageInfo {
+            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            image_view: textures["tilda_h"].image_view,
+            sampler: textures["tilda_h"].sampler,
+            ..Default::default()
+        };
+        let infos = [tilda_h_texture_info];
         let tilda_h_set_write = vk::WriteDescriptorSet::builder()
             .dst_set(tilda_hs_descriptor_set)
             .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&tilda_h_buffer_infos)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&infos)
             .build();
 
         let frequencies_size = (size_of::<Complex>() * frequencies.len()) as u64;
@@ -929,10 +1016,6 @@ impl VkEngine {
                 descriptor_set: tilda_hs_descriptor_set,
                 buffers: [
                     VkBuffer {
-                        buffer: tilda_h_buffer,
-                        buffer_memory: tilda_h_buffer_memory,
-                    },
-                    VkBuffer {
                         buffer: frequencies_buffer,
                         buffer_memory: frequencies_buffer_memory,
                     },
@@ -950,6 +1033,7 @@ impl VkEngine {
             mesh_shader,
             compute_pipelines,
             start: std::time::Instant::now(),
+            textures,
         };
     }
 
@@ -1033,6 +1117,21 @@ impl VkEngine {
             self.device.destroy_image_view(image_view, None);
         }
 
+        for (
+            _,
+            VkTexture {
+                image,
+                image_view,
+                sampler,
+            },
+        ) in self.textures.iter()
+        {
+            self.device.destroy_sampler(*sampler, None);
+            self.device.destroy_image_view(*image_view, None);
+            self.device.destroy_image(image.image, None);
+            self.device.free_memory(image.image_memory, None);
+        }
+
         self.swapchain_loader
             .destroy_swapchain(self.swapchain, None);
 
@@ -1098,7 +1197,7 @@ impl VkEngine {
         scene_data.fog_distances.z = std::time::Instant::now()
             .duration_since(self.start)
             .as_millis() as f32
-            / 1000.0;
+            / 10000.0;
         scene_data.fog_distances.w = self.camera.fov;
 
         let scene_data_offset =
@@ -1367,5 +1466,11 @@ impl VkEngine {
                 self.draw();
             };
         }
+    }
+}
+
+impl Drop for VkEngine {
+    fn drop(&mut self) {
+        unsafe { self.cleanup() };
     }
 }

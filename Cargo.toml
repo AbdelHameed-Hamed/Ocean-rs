@@ -9,3 +9,5 @@ edition = "2018"
 [dependencies]
 sdl2 = "0.34.3"
 ash = "0.32.1"
+rand = "0.8.4"
+rand_distr = "0.4.2"

@@ -14,7 +14,8 @@ cbuffer SceneData: register(b0, space0) {
     float4 sunlight_color;
 };
 
-StructuredBuffer<Complex> tilde_h_zero: register(t0, space1);
+Texture2D<float2> tilde_h_zero: register(t0, space1);
+SamplerState tilde_h_zero_sampler: register(s0, space1);
 StructuredBuffer<Complex> frequencies: register(t1, space1);
 
 RWStructuredBuffer<Complex> ifft_output_input: register(u2, space1);
@@ -37,15 +38,21 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     if (flags.flags.x == 0) {
         // Calculate spectrum
         float l = fog_distances.x;
-        uint idx1 = z * OCEAN_DIM + x;
-        uint idx2 = (OCEAN_DIM - z) * OCEAN_DIM + (OCEAN_DIM - x);
+        uint2 loc1 = uint2(x, z);
+        uint2 loc2 = uint2((OCEAN_DIM - x), (OCEAN_DIM - z));
 
-        float w_k_t = frequencies[idx2].real * fog_distances.z;
+        float w_k_t = frequencies[z * OCEAN_DIM + x].real * fog_distances.z;
+
+        float2 temp1 = tilde_h_zero.SampleLevel(tilde_h_zero_sampler, loc1, 0);
+        float2 temp2 = tilde_h_zero.SampleLevel(tilde_h_zero_sampler, loc2, 0);
+
+        Complex tilda_h1 = { temp1.x, temp1.y };
+        Complex tilda_h2 = { temp2.x, temp2.y };
 
         // Now we compute tilde_h at time t
         pingpong[0][x] = complex_add(
-            complex_mul(tilde_h_zero[idx1], complex_exp(w_k_t)),
-            complex_mul(tilde_h_zero[idx2], complex_exp(-w_k_t))
+            complex_mul(tilda_h1, complex_exp(w_k_t)),
+            complex_mul(tilda_h2, complex_exp(-w_k_t))
         );
     }
 
@@ -138,7 +145,7 @@ void ms_main(
             // Transform the vertex and register it
             out_verts[vert_idx].pos = mul(
                 mul(projection, view),
-                float4(global_x, ifft_input_output[global_idx].real, global_z, 1.0)
+                float4(global_x, ifft_input_output[global_idx].real * 10, global_z, 1.0)
             );
 
             // Now figure which quad you represent and register its triangles
