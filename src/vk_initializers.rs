@@ -692,6 +692,7 @@ pub fn transition_image_layout(
     let dst_access = match new_layout {
         vk::ImageLayout::TRANSFER_DST_OPTIMAL => vk::AccessFlags::TRANSFER_WRITE,
         vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => vk::AccessFlags::SHADER_READ,
+        vk::ImageLayout::GENERAL => vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
         _ => panic!("Dunno what new_layout this is"),
     };
 

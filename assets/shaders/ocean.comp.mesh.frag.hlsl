@@ -15,19 +15,17 @@ cbuffer SceneData: register(b0, space0) {
 };
 
 Texture2D<float2> tilde_h_zero: register(t0, space1);
-SamplerState tilde_h_zero_sampler: register(s0, space1);
 Texture2D<float> frequencies: register(t1, space1);
-SamplerState frequencies_sampler: register(s1, space1);
 
-RWStructuredBuffer<Complex> ifft_output_input: register(u2, space1);
-RWStructuredBuffer<Complex> ifft_input_output: register(u3, space1);
+RWTexture2D<float2> ifft_output_input: register(u2, space1);
+RWTexture2D<float2> ifft_input_output: register(u3, space1);
 
 //------------------------------------------------------------------------------------------------------
 // Compute Shader
 //------------------------------------------------------------------------------------------------------
 
 // Based on https://github.com/asylum2010/Asylum_Tutorials/blob/master/Media/ShadersGL/fourier_fft.comp
-groupshared Complex pingpong[2][OCEAN_DIM];
+groupshared float2 pingpong[2][OCEAN_DIM];
 
 [[vk::push_constant]]
 struct {
@@ -42,13 +40,10 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
         uint2 loc1 = uint2(x, z);
         uint2 loc2 = uint2((OCEAN_DIM - x), (OCEAN_DIM - z));
 
-        float w_k_t = frequencies.SampleLevel(frequencies_sampler, loc1, 0) * fog_distances.z;
+        float w_k_t = frequencies[loc1] * fog_distances.z;
 
-        float2 temp1 = tilde_h_zero.SampleLevel(tilde_h_zero_sampler, loc1, 0);
-        float2 temp2 = tilde_h_zero.SampleLevel(tilde_h_zero_sampler, loc2, 0);
-
-        Complex tilda_h1 = { temp1.x, temp1.y };
-        Complex tilda_h2 = { temp2.x, temp2.y };
+        float2 tilda_h1 = tilde_h_zero[loc1];
+        float2 tilda_h2 = tilde_h_zero[loc2];
 
         // Now we compute tilde_h at time t
         pingpong[0][x] = complex_add(
@@ -63,7 +58,7 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     if (flags.flags.x == 0) {
         pingpong[1][nj] = pingpong[0][x];
     } else {
-        pingpong[1][nj] = ifft_output_input[z * OCEAN_DIM + x];
+        pingpong[1][nj] = ifft_output_input[uint2(x, z)];
     }
 
     GroupMemoryBarrierWithGroupSync();
@@ -77,10 +72,10 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
 
         if (x % m < mh) {
             // twiddle factor W_N^k
-            Complex w_n_k = complex_exp(TWO_PI * x / m);
+            float2 w_n_k = complex_exp(TWO_PI * x / m);
 
-            Complex even = pingpong[src][x];
-            Complex odd = complex_mul(w_n_k, pingpong[src][x + mh]);
+            float2 even = pingpong[src][x];
+            float2 odd = complex_mul(w_n_k, pingpong[src][x + mh]);
 
             pingpong[1 - src][x] = complex_add(even, odd);
             pingpong[1 - src][x + mh] = complex_add(even, complex_float_mul(odd, -1));
@@ -92,8 +87,8 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     }
 
     // STEP 3: write output
-    uint idx = x * OCEAN_DIM + z;
-    Complex result = pingpong[src][x];
+    uint2 idx = {z, x};
+    float2 result = pingpong[src][x];
     if (flags.flags.x == 0) {
         ifft_output_input[idx] = result;
     } else {
@@ -141,12 +136,12 @@ void ms_main(
 
             uint global_x = group_idx_x * patch_dim + x + 1 - group_idx_x;
             uint global_z = group_idx_z * patch_dim + z + 1 - group_idx_z;
-            uint global_idx = (global_z - 1) * OCEAN_DIM + (global_x - 1);
+            uint2 global_idx = {(global_z - 1), (global_x - 1)};
 
             // Transform the vertex and register it
             out_verts[vert_idx].pos = mul(
                 mul(projection, view),
-                float4(global_x, ifft_input_output[global_idx].real * 10, global_z, 1.0)
+                float4(global_x, ifft_input_output[global_idx].x * 10, global_z, 1.0)
             );
 
             // Now figure which quad you represent and register its triangles

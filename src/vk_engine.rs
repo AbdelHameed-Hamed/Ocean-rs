@@ -60,7 +60,6 @@ struct Mesh {
 struct MeshShaderData {
     descriptor_set_layout: vk::DescriptorSetLayout,
     descriptor_set: vk::DescriptorSet,
-    buffers: [VkBuffer; 2],
     meshlet_count: u32,
 }
 
@@ -532,13 +531,13 @@ impl VkEngine {
             vk::ShaderStageFlags::COMPUTE,
         );
         let ifft_output_input_binding = vk_initializers::descriptor_set_layout_binding(
-            vk::DescriptorType::STORAGE_BUFFER,
+            vk::DescriptorType::STORAGE_IMAGE,
             2,
             1,
             vk::ShaderStageFlags::COMPUTE,
         );
         let ifft_input_output_binding = vk_initializers::descriptor_set_layout_binding(
-            vk::DescriptorType::STORAGE_BUFFER,
+            vk::DescriptorType::STORAGE_IMAGE,
             3,
             1,
             vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::MESH_NV,
@@ -606,8 +605,8 @@ impl VkEngine {
             graphics_queue,
             tilda_h_extent,
             vk::Format::R32G32_SFLOAT,
-            temp_buffer,
-            temp_buffer_memory,
+            Some(temp_buffer),
+            Some(temp_buffer_memory),
             "tilda_h",
             &mut textures,
         );
@@ -650,8 +649,8 @@ impl VkEngine {
             graphics_queue,
             tilda_h_extent,
             vk::Format::R32_SFLOAT,
-            temp_buffer,
-            temp_buffer_memory,
+            Some(temp_buffer),
+            Some(temp_buffer_memory),
             "frequencies",
             &mut textures,
         );
@@ -663,52 +662,46 @@ impl VkEngine {
             .image_info(&infos)
             .build();
 
-        let ifft_output_input_size = (size_of::<Complex>() * tilde_h_zero.len()) as u64;
-        let (ifft_output_input_buffer, ifft_output_input_buffer_memory) =
-            vk_initializers::create_buffer(
-                &instance,
-                physical_device,
-                &device,
-                ifft_output_input_size,
-                vk::BufferUsageFlags::STORAGE_BUFFER,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            );
-
-        let ifft_output_input_buffer_info = vk::DescriptorBufferInfo::builder()
-            .buffer(ifft_output_input_buffer)
-            .offset(0)
-            .range(ifft_output_input_size)
-            .build();
-        let ifft_output_input_buffer_infos = [ifft_output_input_buffer_info];
+        let ifft_output_input_info = Self::add_texture(
+            &instance,
+            physical_device,
+            &device,
+            command_pool,
+            graphics_queue,
+            tilda_h_extent,
+            vk::Format::R32G32_SFLOAT,
+            None,
+            None,
+            "ifft_output_input",
+            &mut textures,
+        );
+        let infos = [ifft_output_input_info];
         let ifft_output_input_set_write = vk::WriteDescriptorSet::builder()
             .dst_set(tilda_hs_descriptor_set)
             .dst_binding(2)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&ifft_output_input_buffer_infos)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .image_info(&infos)
             .build();
 
-        let ifft_input_output_size = (size_of::<Complex>() * tilde_h_zero.len()) as u64;
-        let (ifft_input_output_buffer, ifft_input_output_buffer_memory) =
-            vk_initializers::create_buffer(
-                &instance,
-                physical_device,
-                &device,
-                ifft_input_output_size,
-                vk::BufferUsageFlags::STORAGE_BUFFER,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            );
-
-        let ifft_input_output_buffer_info = vk::DescriptorBufferInfo::builder()
-            .buffer(ifft_input_output_buffer)
-            .offset(0)
-            .range(ifft_input_output_size)
-            .build();
-        let ifft_input_output_buffer_infos = [ifft_input_output_buffer_info];
+        let ifft_input_output_info = Self::add_texture(
+            &instance,
+            physical_device,
+            &device,
+            command_pool,
+            graphics_queue,
+            tilda_h_extent,
+            vk::Format::R32G32_SFLOAT,
+            None,
+            None,
+            "ifft_input_output",
+            &mut textures,
+        );
+        let infos = [ifft_input_output_info];
         let ifft_input_output_set_write = vk::WriteDescriptorSet::builder()
             .dst_set(tilda_hs_descriptor_set)
             .dst_binding(3)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&ifft_input_output_buffer_infos)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .image_info(&infos)
             .build();
 
         unsafe {
@@ -921,16 +914,6 @@ impl VkEngine {
             mesh_shader_data: MeshShaderData {
                 descriptor_set_layout: tilda_hs_descriptor_layout,
                 descriptor_set: tilda_hs_descriptor_set,
-                buffers: [
-                    VkBuffer {
-                        buffer: ifft_output_input_buffer,
-                        buffer_memory: ifft_output_input_buffer_memory,
-                    },
-                    VkBuffer {
-                        buffer: ifft_input_output_buffer,
-                        buffer_memory: ifft_input_output_buffer_memory,
-                    },
-                ],
                 meshlet_count: 1,
             },
             mesh_shader,
@@ -964,14 +947,16 @@ impl VkEngine {
         graphics_queue: vk::Queue,
         extent: vk::Extent3D,
         format: vk::Format,
-        temp_buffer: vk::Buffer,
-        temp_buffer_memory: vk::DeviceMemory,
+        temp_buffer: Option<vk::Buffer>,
+        temp_buffer_memory: Option<vk::DeviceMemory>,
         name: &str,
         textures: &mut HashMap<String, VkTexture>,
     ) -> vk::DescriptorImageInfo {
         let texture_img_info = vk_initializers::create_image_create_info(
             format,
-            vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::TRANSFER_DST
+                | vk::ImageUsageFlags::STORAGE,
             extent,
         );
         let (texture_img, texture_memory) = vk_initializers::create_image(
@@ -985,33 +970,50 @@ impl VkEngine {
             image: texture_img,
             image_memory: texture_memory,
         };
-        vk_initializers::transition_image_layout(
-            &device,
-            command_pool,
-            graphics_queue,
-            texture_img.image,
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-        );
-        vk_initializers::copy_buffer_to_image(
-            &device,
-            command_pool,
-            graphics_queue,
-            temp_buffer,
-            texture_img.image,
-            extent,
-        );
-        unsafe {
-            vk_initializers::free_buffer_and_memory(&device, temp_buffer, temp_buffer_memory)
-        };
-        vk_initializers::transition_image_layout(
-            &device,
-            command_pool,
-            graphics_queue,
-            texture_img.image,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        );
+
+        let image_layout;
+        if let (Some(temp_buffer), Some(temp_buffer_memory)) = (temp_buffer, temp_buffer_memory) {
+            vk_initializers::transition_image_layout(
+                &device,
+                command_pool,
+                graphics_queue,
+                texture_img.image,
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            );
+            vk_initializers::copy_buffer_to_image(
+                &device,
+                command_pool,
+                graphics_queue,
+                temp_buffer,
+                texture_img.image,
+                extent,
+            );
+            unsafe {
+                vk_initializers::free_buffer_and_memory(&device, temp_buffer, temp_buffer_memory)
+            };
+            vk_initializers::transition_image_layout(
+                &device,
+                command_pool,
+                graphics_queue,
+                texture_img.image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            );
+
+            image_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+        } else {
+            vk_initializers::transition_image_layout(
+                &device,
+                command_pool,
+                graphics_queue,
+                texture_img.image,
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::GENERAL,
+            );
+
+            image_layout = vk::ImageLayout::GENERAL;
+        }
 
         let texture_image_view_info = vk_initializers::create_image_view_create_info(
             format,
@@ -1048,7 +1050,7 @@ impl VkEngine {
         textures.insert(name.to_string(), texture);
 
         return vk::DescriptorImageInfo {
-            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            image_layout: image_layout,
             image_view: textures[name].image_view,
             sampler: textures[name].sampler,
             ..Default::default()
@@ -1072,14 +1074,6 @@ impl VkEngine {
             self.scene_data_buffer.buffer,
             self.scene_data_buffer.buffer_memory,
         );
-
-        for buffer in self.mesh_shader_data.buffers.iter() {
-            vk_initializers::free_buffer_and_memory(
-                &self.device,
-                buffer.buffer,
-                buffer.buffer_memory,
-            );
-        }
 
         self.device.destroy_command_pool(self.command_pool, None);
 
