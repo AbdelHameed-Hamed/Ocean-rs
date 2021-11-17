@@ -17,8 +17,8 @@ cbuffer SceneData: register(b0, space0) {
 Texture2D<float2> tilde_h_zero: register(t0, space1);
 Texture2D<float> frequencies: register(t1, space1);
 
-RWTexture2D<float2> ifft_output_input: register(u2, space1);
-RWTexture2D<float2> ifft_input_output: register(u3, space1);
+RWTexture2D<float4> ifft_output_input: register(u2, space1);
+RWTexture2D<float4> ifft_input_output: register(u3, space1);
 
 //------------------------------------------------------------------------------------------------------
 // Compute Shader
@@ -36,19 +36,18 @@ struct {
 void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     if (flags.flags.x == 0) {
         // Calculate spectrum
-        float l = fog_distances.x;
         uint2 loc1 = uint2(x, z);
-        uint2 loc2 = uint2((OCEAN_DIM - x), (OCEAN_DIM - z));
+        uint2 loc2 = uint2(OCEAN_DIM - x, OCEAN_DIM - z);
 
         float w_k_t = frequencies[loc1] * fog_distances.z;
 
-        float2 tilda_h1 = tilde_h_zero[loc1];
-        float2 tilda_h2 = tilde_h_zero[loc2];
+        float2 tilde_h1 = tilde_h_zero[loc1];
+        float2 tilde_h2 = tilde_h_zero[loc2] * float2(1, -1); // complex conjugation
 
         // Now we compute tilde_h at time t
         pingpong[0][x] = complex_add(
-            complex_mul(tilda_h1, complex_exp(w_k_t)),
-            complex_mul(tilda_h2, complex_exp(-w_k_t))
+            complex_mul(tilde_h1, complex_exp(w_k_t)),
+            complex_mul(tilde_h2, complex_exp(-w_k_t))
         );
     }
 
@@ -58,7 +57,7 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     if (flags.flags.x == 0) {
         pingpong[1][nj] = pingpong[0][x];
     } else {
-        pingpong[1][nj] = ifft_output_input[uint2(x, z)];
+        pingpong[1][nj] = ifft_output_input[uint2(x, z)].xy;
     }
 
     GroupMemoryBarrierWithGroupSync();
@@ -90,9 +89,9 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     uint2 idx = {z, x};
     float2 result = pingpong[src][x];
     if (flags.flags.x == 0) {
-        ifft_output_input[idx] = result;
+        ifft_output_input[idx].xy = result;
     } else {
-        ifft_input_output[idx] = complex_float_mul(result, ((x + z) & 1) == 1 ? -1 : 1);
+        ifft_input_output[idx].xy = complex_float_mul(result, ((x + z) & 1) == 1 ? -1 : 1);
     }
 }
 
@@ -141,7 +140,7 @@ void ms_main(
             // Transform the vertex and register it
             out_verts[vert_idx].pos = mul(
                 mul(projection, view),
-                float4(global_x, ifft_input_output[global_idx].x * 10, global_z, 1.0)
+                float4(global_x, ifft_input_output[global_idx].x * 15, global_z, 1.0)
             );
 
             // Now figure which quad you represent and register its triangles

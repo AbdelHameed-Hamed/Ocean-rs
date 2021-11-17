@@ -518,7 +518,7 @@ impl VkEngine {
             }
         }
 
-        let tilda_h_binding = vk_initializers::descriptor_set_layout_binding(
+        let tilde_h_binding = vk_initializers::descriptor_set_layout_binding(
             vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             0,
             1,
@@ -544,35 +544,35 @@ impl VkEngine {
         );
 
         let bindings = [
-            tilda_h_binding,
+            tilde_h_binding,
             frequencies_binding,
             ifft_output_input_binding,
             ifft_input_output_binding,
         ];
-        let tilda_hs_descriptor_layout_info =
+        let tilde_hs_descriptor_layout_info =
             vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
-        let tilda_hs_descriptor_layout = unsafe {
+        let tilde_hs_descriptor_layout = unsafe {
             device
-                .create_descriptor_set_layout(&tilda_hs_descriptor_layout_info, None)
+                .create_descriptor_set_layout(&tilde_hs_descriptor_layout_info, None)
                 .unwrap()
         };
 
-        let set_layouts = [tilda_hs_descriptor_layout];
-        let tilda_hs_descriptor_allocate_info = vk::DescriptorSetAllocateInfo::builder()
+        let set_layouts = [tilde_hs_descriptor_layout];
+        let tilde_hs_descriptor_allocate_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
             .set_layouts(&set_layouts);
-        let tilda_hs_descriptor_set = unsafe {
+        let tilde_hs_descriptor_set = unsafe {
             device
-                .allocate_descriptor_sets(&tilda_hs_descriptor_allocate_info)
+                .allocate_descriptor_sets(&tilde_hs_descriptor_allocate_info)
                 .unwrap()[0]
         };
 
-        let tilda_h_size = (size_of::<Complex>() * tilde_h_zero.len()) as u64;
+        let tilde_h_size = (size_of::<Complex>() * tilde_h_zero.len()) as u64;
         let (temp_buffer, temp_buffer_memory) = vk_initializers::create_buffer(
             &instance,
             physical_device,
             &device,
-            tilda_h_size,
+            tilde_h_size,
             vk::BufferUsageFlags::TRANSFER_SRC,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         );
@@ -582,7 +582,7 @@ impl VkEngine {
                 .map_memory(
                     temp_buffer_memory,
                     0,
-                    tilda_h_size,
+                    tilde_h_size,
                     vk::MemoryMapFlags::empty(),
                 )
                 .unwrap() as *mut Complex;
@@ -592,27 +592,27 @@ impl VkEngine {
 
         let mut textures = HashMap::<String, VkTexture>::new();
 
-        let tilda_h_extent = vk::Extent3D {
+        let tilde_h_extent = vk::Extent3D {
             width: (OCEAN_PATCH_DIM + 1) as u32,
             height: (OCEAN_PATCH_DIM + 1) as u32,
             depth: 1,
         };
-        let tilda_h_info = Self::add_texture(
+        let tilde_h_info = Self::add_texture(
             &instance,
             physical_device,
             &device,
             command_pool,
             graphics_queue,
-            tilda_h_extent,
+            tilde_h_extent,
             vk::Format::R32G32_SFLOAT,
             Some(temp_buffer),
             Some(temp_buffer_memory),
-            "tilda_h",
+            "tilde_h",
             &mut textures,
         );
-        let infos = [tilda_h_info];
-        let tilda_h_set_write = vk::WriteDescriptorSet::builder()
-            .dst_set(tilda_hs_descriptor_set)
+        let infos = [tilde_h_info];
+        let tilde_h_set_write = vk::WriteDescriptorSet::builder()
+            .dst_set(tilde_hs_descriptor_set)
             .dst_binding(0)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .image_info(&infos)
@@ -647,7 +647,7 @@ impl VkEngine {
             &device,
             command_pool,
             graphics_queue,
-            tilda_h_extent,
+            tilde_h_extent,
             vk::Format::R32_SFLOAT,
             Some(temp_buffer),
             Some(temp_buffer_memory),
@@ -656,7 +656,7 @@ impl VkEngine {
         );
         let infos = [frequencies_info];
         let frequencies_set_write = vk::WriteDescriptorSet::builder()
-            .dst_set(tilda_hs_descriptor_set)
+            .dst_set(tilde_hs_descriptor_set)
             .dst_binding(1)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .image_info(&infos)
@@ -668,8 +668,8 @@ impl VkEngine {
             &device,
             command_pool,
             graphics_queue,
-            tilda_h_extent,
-            vk::Format::R32G32_SFLOAT,
+            tilde_h_extent,
+            vk::Format::R32G32B32A32_SFLOAT,
             None,
             None,
             "ifft_output_input",
@@ -677,7 +677,7 @@ impl VkEngine {
         );
         let infos = [ifft_output_input_info];
         let ifft_output_input_set_write = vk::WriteDescriptorSet::builder()
-            .dst_set(tilda_hs_descriptor_set)
+            .dst_set(tilde_hs_descriptor_set)
             .dst_binding(2)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .image_info(&infos)
@@ -689,8 +689,8 @@ impl VkEngine {
             &device,
             command_pool,
             graphics_queue,
-            tilda_h_extent,
-            vk::Format::R32G32_SFLOAT,
+            tilde_h_extent,
+            vk::Format::R32G32B32A32_SFLOAT,
             None,
             None,
             "ifft_input_output",
@@ -698,7 +698,7 @@ impl VkEngine {
         );
         let infos = [ifft_input_output_info];
         let ifft_input_output_set_write = vk::WriteDescriptorSet::builder()
-            .dst_set(tilda_hs_descriptor_set)
+            .dst_set(tilde_hs_descriptor_set)
             .dst_binding(3)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .image_info(&infos)
@@ -707,7 +707,7 @@ impl VkEngine {
         unsafe {
             device.update_descriptor_sets(
                 &[
-                    tilda_h_set_write,
+                    tilde_h_set_write,
                     frequencies_set_write,
                     ifft_output_input_set_write,
                     ifft_input_output_set_write,
@@ -725,7 +725,7 @@ impl VkEngine {
             device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::builder()
-                        .set_layouts(&[global_set_layout, tilda_hs_descriptor_layout])
+                        .set_layouts(&[global_set_layout, tilde_hs_descriptor_layout])
                         .push_constant_ranges(&push_constant_ranges),
                     None,
                 )
@@ -912,8 +912,8 @@ impl VkEngine {
             camera,
             last_timestamp: std::time::Instant::now(),
             mesh_shader_data: MeshShaderData {
-                descriptor_set_layout: tilda_hs_descriptor_layout,
-                descriptor_set: tilda_hs_descriptor_set,
+                descriptor_set_layout: tilde_hs_descriptor_layout,
+                descriptor_set: tilde_hs_descriptor_set,
                 meshlet_count: 1,
             },
             mesh_shader,
@@ -1193,7 +1193,7 @@ impl VkEngine {
         scene_data.fog_distances.z = std::time::Instant::now()
             .duration_since(self.start)
             .as_millis() as f32
-            / 10000.0;
+            / 1000.0;
         scene_data.fog_distances.w = self.camera.fov;
 
         let scene_data_offset =
