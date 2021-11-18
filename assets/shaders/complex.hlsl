@@ -18,18 +18,6 @@ float2 complex_exp(float imag) {
     return result;
 }
 
-float2 complex_add(float2 lhs, float2 rhs) {
-    float2 result = { lhs.x + rhs.x, lhs.y + rhs.y };
-
-    return result;
-}
-
-float2 complex_float_mul(float2 lhs, float rhs) {
-    float2 result = { lhs.x * rhs, lhs.y * rhs };
-
-    return result;
-}
-
 float2 complex_conjugate(float2 self) {
     float2 result = { self.x, -self.y };
 

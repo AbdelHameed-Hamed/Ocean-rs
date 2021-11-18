@@ -25,7 +25,7 @@ RWTexture2D<float4> ifft_input_output: register(u3, space1);
 //------------------------------------------------------------------------------------------------------
 
 // Based on https://github.com/asylum2010/Asylum_Tutorials/blob/master/Media/ShadersGL/fourier_fft.comp
-groupshared float2 pingpong[2][OCEAN_DIM];
+groupshared float4 pingpong[2][OCEAN_DIM];
 
 [[vk::push_constant]]
 struct {
@@ -42,13 +42,19 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
         float w_k_t = frequencies[loc1] * fog_distances.z;
 
         float2 tilde_h1 = tilde_h_zero[loc1];
-        float2 tilde_h2 = tilde_h_zero[loc2] * float2(1, -1); // complex conjugation
+        float2 tilde_h2 = complex_conjugate(tilde_h_zero[loc2]); // complex conjugation
+
+        float start = OCEAN_DIM / 2;
+        float2 ik = complex_mul(
+            TWO_PI * float2(start - x, start - z) / 20.0f,
+            float2(0, 1)
+        );
 
         // Now we compute tilde_h at time t
-        pingpong[0][x] = complex_add(
-            complex_mul(tilde_h1, complex_exp(w_k_t)),
-            complex_mul(tilde_h2, complex_exp(-w_k_t))
-        );
+        pingpong[0][x].xy =
+            complex_mul(tilde_h1, complex_exp(w_k_t)) +
+            complex_mul(tilde_h2, complex_exp(-w_k_t));
+        pingpong[0][x].zw = complex_mul(ik, pingpong[0][x].xy);
     }
 
     // Do IFFT
@@ -57,7 +63,7 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     if (flags.flags.x == 0) {
         pingpong[1][nj] = pingpong[0][x];
     } else {
-        pingpong[1][nj] = ifft_output_input[uint2(x, z)].xy;
+        pingpong[1][nj] = ifft_output_input[uint2(x, z)];
     }
 
     GroupMemoryBarrierWithGroupSync();
@@ -73,11 +79,11 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
             // twiddle factor W_N^k
             float2 w_n_k = complex_exp(TWO_PI * x / m);
 
-            float2 even = pingpong[src][x];
-            float2 odd = complex_mul(w_n_k, pingpong[src][x + mh]);
+            float2 even = pingpong[src][x].xy;
+            float2 odd = complex_mul(w_n_k, pingpong[src][x + mh].xy);
 
-            pingpong[1 - src][x] = complex_add(even, odd);
-            pingpong[1 - src][x + mh] = complex_add(even, complex_float_mul(odd, -1));
+            pingpong[1 - src][x].xy = even + odd;
+            pingpong[1 - src][x + mh].xy = even - odd;
         }
 
         src = 1 - src;
@@ -87,11 +93,11 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
 
     // STEP 3: write output
     uint2 idx = {z, x};
-    float2 result = pingpong[src][x];
+    float2 result = pingpong[src][x].xy;
     if (flags.flags.x == 0) {
         ifft_output_input[idx].xy = result;
     } else {
-        ifft_input_output[idx].xy = complex_float_mul(result, ((x + z) & 1) == 1 ? -1 : 1);
+        ifft_input_output[idx].xy = result * (((x + z) & 1) == 1 ? -1 : 1);
     }
 }
 
