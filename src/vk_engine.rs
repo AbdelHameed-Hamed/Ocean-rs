@@ -467,7 +467,7 @@ impl VkEngine {
             };
         }
 
-        let mut tilde_h_zero: Vec<Complex> =
+        let mut waves: Vec<Vec4> =
             vec![unsafe { std::mem::zeroed() }; (OCEAN_PATCH_DIM + 1) * (OCEAN_PATCH_DIM + 1)];
         let mut frequencies: Vec<f32> =
             vec![unsafe { std::mem::zeroed() }; (OCEAN_PATCH_DIM + 1) * (OCEAN_PATCH_DIM + 1)];
@@ -511,14 +511,33 @@ impl VkEngine {
                     normal.sample(&mut rand::thread_rng()),
                 );
 
-                let idx = i * (OCEAN_PATCH_DIM + 1) + j;
+                let tilde_h_zero = Complex { real: r1, imag: r2 } * h_zero_k;
+                let frequency = f32::sqrt(g * k.length());
 
-                tilde_h_zero[idx] = Complex { real: r1, imag: r2 } * h_zero_k;
-                frequencies[idx] = f32::sqrt(g * k.length());
+                let d_x = if k.x == (OCEAN_PATCH_DIM / 2) as f32 * TWO_PI / L {
+                    0.0
+                } else {
+                    k.x
+                };
+
+                let d_z = if k.y == (OCEAN_PATCH_DIM / 2) as f32 * TWO_PI / L {
+                    0.0
+                } else {
+                    k.y
+                };
+
+                let idx = i * (OCEAN_PATCH_DIM + 1) + j;
+                waves[idx] = Vec4 {
+                    x: tilde_h_zero.real,
+                    y: tilde_h_zero.imag,
+                    z: d_x,
+                    w: d_z,
+                };
+                frequencies[idx] = frequency;
             }
         }
 
-        let tilde_h_binding = vk_initializers::descriptor_set_layout_binding(
+        let waves_binding = vk_initializers::descriptor_set_layout_binding(
             vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             0,
             1,
@@ -544,35 +563,35 @@ impl VkEngine {
         );
 
         let bindings = [
-            tilde_h_binding,
+            waves_binding,
             frequencies_binding,
             ifft_output_input_binding,
             ifft_input_output_binding,
         ];
-        let tilde_hs_descriptor_layout_info =
+        let waves_descriptor_layout_info =
             vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
-        let tilde_hs_descriptor_layout = unsafe {
+        let waves_descriptor_layout = unsafe {
             device
-                .create_descriptor_set_layout(&tilde_hs_descriptor_layout_info, None)
+                .create_descriptor_set_layout(&waves_descriptor_layout_info, None)
                 .unwrap()
         };
 
-        let set_layouts = [tilde_hs_descriptor_layout];
-        let tilde_hs_descriptor_allocate_info = vk::DescriptorSetAllocateInfo::builder()
+        let set_layouts = [waves_descriptor_layout];
+        let waves_descriptor_allocate_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
             .set_layouts(&set_layouts);
-        let tilde_hs_descriptor_set = unsafe {
+        let waves_descriptor_set = unsafe {
             device
-                .allocate_descriptor_sets(&tilde_hs_descriptor_allocate_info)
+                .allocate_descriptor_sets(&waves_descriptor_allocate_info)
                 .unwrap()[0]
         };
 
-        let tilde_h_size = (size_of::<Complex>() * tilde_h_zero.len()) as u64;
+        let waves_size = (size_of::<Vec4>() * waves.len()) as u64;
         let (temp_buffer, temp_buffer_memory) = vk_initializers::create_buffer(
             &instance,
             physical_device,
             &device,
-            tilde_h_size,
+            waves_size,
             vk::BufferUsageFlags::TRANSFER_SRC,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         );
@@ -582,37 +601,37 @@ impl VkEngine {
                 .map_memory(
                     temp_buffer_memory,
                     0,
-                    tilde_h_size,
+                    waves_size,
                     vk::MemoryMapFlags::empty(),
                 )
-                .unwrap() as *mut Complex;
-            data_ptr.copy_from_nonoverlapping(tilde_h_zero.as_ptr(), tilde_h_zero.len());
+                .unwrap() as *mut Vec4;
+            data_ptr.copy_from_nonoverlapping(waves.as_ptr(), waves.len());
             device.unmap_memory(temp_buffer_memory);
         }
 
         let mut textures = HashMap::<String, VkTexture>::new();
 
-        let tilde_h_extent = vk::Extent3D {
+        let waves_extent = vk::Extent3D {
             width: (OCEAN_PATCH_DIM + 1) as u32,
             height: (OCEAN_PATCH_DIM + 1) as u32,
             depth: 1,
         };
-        let tilde_h_info = Self::add_texture(
+        let waves_info = Self::add_texture(
             &instance,
             physical_device,
             &device,
             command_pool,
             graphics_queue,
-            tilde_h_extent,
-            vk::Format::R32G32_SFLOAT,
+            waves_extent,
+            vk::Format::R32G32B32A32_SFLOAT,
             Some(temp_buffer),
             Some(temp_buffer_memory),
-            "tilde_h",
+            "waves",
             &mut textures,
         );
-        let infos = [tilde_h_info];
-        let tilde_h_set_write = vk::WriteDescriptorSet::builder()
-            .dst_set(tilde_hs_descriptor_set)
+        let infos = [waves_info];
+        let waves_set_write = vk::WriteDescriptorSet::builder()
+            .dst_set(waves_descriptor_set)
             .dst_binding(0)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .image_info(&infos)
@@ -647,7 +666,7 @@ impl VkEngine {
             &device,
             command_pool,
             graphics_queue,
-            tilde_h_extent,
+            waves_extent,
             vk::Format::R32_SFLOAT,
             Some(temp_buffer),
             Some(temp_buffer_memory),
@@ -656,7 +675,7 @@ impl VkEngine {
         );
         let infos = [frequencies_info];
         let frequencies_set_write = vk::WriteDescriptorSet::builder()
-            .dst_set(tilde_hs_descriptor_set)
+            .dst_set(waves_descriptor_set)
             .dst_binding(1)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .image_info(&infos)
@@ -668,7 +687,7 @@ impl VkEngine {
             &device,
             command_pool,
             graphics_queue,
-            tilde_h_extent,
+            waves_extent,
             vk::Format::R32G32B32A32_SFLOAT,
             None,
             None,
@@ -677,7 +696,7 @@ impl VkEngine {
         );
         let infos = [ifft_output_input_info];
         let ifft_output_input_set_write = vk::WriteDescriptorSet::builder()
-            .dst_set(tilde_hs_descriptor_set)
+            .dst_set(waves_descriptor_set)
             .dst_binding(2)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .image_info(&infos)
@@ -689,7 +708,7 @@ impl VkEngine {
             &device,
             command_pool,
             graphics_queue,
-            tilde_h_extent,
+            waves_extent,
             vk::Format::R32G32B32A32_SFLOAT,
             None,
             None,
@@ -698,7 +717,7 @@ impl VkEngine {
         );
         let infos = [ifft_input_output_info];
         let ifft_input_output_set_write = vk::WriteDescriptorSet::builder()
-            .dst_set(tilde_hs_descriptor_set)
+            .dst_set(waves_descriptor_set)
             .dst_binding(3)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .image_info(&infos)
@@ -707,7 +726,7 @@ impl VkEngine {
         unsafe {
             device.update_descriptor_sets(
                 &[
-                    tilde_h_set_write,
+                    waves_set_write,
                     frequencies_set_write,
                     ifft_output_input_set_write,
                     ifft_input_output_set_write,
@@ -725,7 +744,7 @@ impl VkEngine {
             device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::builder()
-                        .set_layouts(&[global_set_layout, tilde_hs_descriptor_layout])
+                        .set_layouts(&[global_set_layout, waves_descriptor_layout])
                         .push_constant_ranges(&push_constant_ranges),
                     None,
                 )
@@ -912,8 +931,8 @@ impl VkEngine {
             camera,
             last_timestamp: std::time::Instant::now(),
             mesh_shader_data: MeshShaderData {
-                descriptor_set_layout: tilde_hs_descriptor_layout,
-                descriptor_set: tilde_hs_descriptor_set,
+                descriptor_set_layout: waves_descriptor_layout,
+                descriptor_set: waves_descriptor_set,
                 meshlet_count: 1,
             },
             mesh_shader,

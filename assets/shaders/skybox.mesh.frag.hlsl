@@ -53,7 +53,7 @@ float4 fs_main(float4 frag_coord: SV_Position): SV_Target {
         col = float3(0.3, 0.55, 0.8) * (1.0 - 0.8 * rd.y) * 0.9;
 
         // Sun
-        float sundot = clamp(dot(rd.xyz, normalize(float3(-0.8,0.3,-0.3))), 0.0, 1.0);
+        float sundot = clamp(dot(rd.xyz, normalize(float3(-0.8, 0.3, -0.3))), 0.0, 1.0);
         col += 0.25 * float3(1.0, 0.7, 0.4) * pow(sundot, 8.0);
         col += 0.75 * float3(1.0, 0.8, 0.5) * pow(sundot, 64.0);
 

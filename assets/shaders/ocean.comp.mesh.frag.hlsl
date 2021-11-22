@@ -1,3 +1,6 @@
+// Reference:
+// https://www.cg.tuwien.ac.at/research/publications/2018/GAMPER-2018-OSG/GAMPER-2018-OSG-thesis.pdf
+
 #include "complex.hlsl"
 
 #define OCEAN_DIM 512
@@ -14,7 +17,7 @@ cbuffer SceneData: register(b0, space0) {
     float4 sunlight_color;
 };
 
-Texture2D<float2> tilde_h_zero: register(t0, space1);
+Texture2D<float4> waves: register(t0, space1);
 Texture2D<float> frequencies: register(t1, space1);
 
 RWTexture2D<float4> ifft_output_input: register(u2, space1);
@@ -41,20 +44,15 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
 
         float w_k_t = frequencies[loc1] * fog_distances.z;
 
-        float2 tilde_h1 = tilde_h_zero[loc1];
-        float2 tilde_h2 = complex_conjugate(tilde_h_zero[loc2]); // complex conjugation
+        float2 tilde_h1 = waves[loc1].xy;
+        float2 tilde_h2 = complex_conjugate(waves[loc2].xy);
 
-        float start = OCEAN_DIM / 2;
-        float2 ik = complex_mul(
-            TWO_PI * float2(start - x, start - z) / 20.0f,
-            float2(0, 1)
-        );
-
-        // Now we compute tilde_h at time t
+        // Calculate tilde_h at time t
         pingpong[0][x].xy =
             complex_mul(tilde_h1, complex_exp(w_k_t)) +
             complex_mul(tilde_h2, complex_exp(-w_k_t));
-        pingpong[0][x].zw = complex_mul(ik, pingpong[0][x].xy);
+
+        pingpong[0][x].zw = complex_mul(waves[loc1].wz * float2(-1, 1), pingpong[0][x].xy);
     }
 
     // Do IFFT
@@ -76,14 +74,22 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
         int mh = m >> 1;            // butterfly group half height
 
         if (x % m < mh) {
-            // twiddle factor W_N^k
+            // Twiddle factor W_N^k
             float2 w_n_k = complex_exp(TWO_PI * x / m);
 
+            // Height calculations
             float2 even = pingpong[src][x].xy;
             float2 odd = complex_mul(w_n_k, pingpong[src][x + mh].xy);
 
             pingpong[1 - src][x].xy = even + odd;
             pingpong[1 - src][x + mh].xy = even - odd;
+
+            // Slope calculations
+            even = pingpong[src][x].zw;
+            odd = complex_mul(w_n_k, pingpong[src][x + mh].zw);
+
+            pingpong[1 - src][x].zw = even + odd;
+            pingpong[1 - src][x + mh].zw = even - odd;
         }
 
         src = 1 - src;
@@ -93,11 +99,11 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
 
     // STEP 3: write output
     uint2 idx = {z, x};
-    float2 result = pingpong[src][x].xy;
+    float4 result = pingpong[src][x];
     if (flags.flags.x == 0) {
-        ifft_output_input[idx].xy = result;
+        ifft_output_input[idx] = result;
     } else {
-        ifft_input_output[idx].xy = result * (((x + z) & 1) == 1 ? -1 : 1);
+        ifft_input_output[idx] = result * (((x + z) & 1) == 1 ? -1 : 1);
     }
 }
 
@@ -116,6 +122,7 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
 
 struct OutputVertex {
     float4 pos: SV_Position;
+    float4 normal: Normal;
 };
 
 [outputtopology("triangle")]
@@ -146,8 +153,11 @@ void ms_main(
             // Transform the vertex and register it
             out_verts[vert_idx].pos = mul(
                 mul(projection, view),
-                float4(global_x, ifft_input_output[global_idx].x * 15, global_z, 1.0)
+                float4(global_x, ifft_input_output[global_idx].x * 15, global_z, 1)
             );
+
+            float3 normal = float3(ifft_input_output[global_idx].zw, 1).xzy;
+            out_verts[vert_idx].normal = float4(normalize(normal), 1);
 
             // Now figure which quad you represent and register its triangles
             if (x < (patch_dim - 1) && z < (patch_dim - 1)) {
