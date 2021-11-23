@@ -7,10 +7,11 @@
 #define OCEAN_DIM_EXPONENT 9 // log_2(OCEAN_DIM)
 #define OCEAN_DIM_RECIPROCAL 0.001953125 // 1 / OCEAN_DIM
 
+// ToDo: Gotta rename things in this struct since they don't reflect the actual uses.
 cbuffer SceneData: register(b0, space0) {
     column_major float4x4 view;
     column_major float4x4 projection;
-    float4 fog_color; // w is for exponent
+    float4 camera_pos;
     float4 fog_distances; //x for min, y for max, z for time, w is unused.
     float4 ambient_color;
     float4 sunlight_direction; //w for sun power
@@ -52,6 +53,7 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
             complex_mul(tilde_h1, complex_exp(w_k_t)) +
             complex_mul(tilde_h2, complex_exp(-w_k_t));
 
+        // Calculate the partial derivative of the vertical component with respect to x and z at time t
         pingpong[0][x].zw = complex_mul(waves[loc1].wz * float2(-1, 1), pingpong[0][x].xy);
     }
 
@@ -153,10 +155,10 @@ void ms_main(
             // Transform the vertex and register it
             out_verts[vert_idx].pos = mul(
                 mul(projection, view),
-                float4(global_x, ifft_input_output[global_idx].x * 15, global_z, 1)
+                float4(global_x, ifft_input_output[global_idx].x * 10, global_z, 1)
             );
 
-            float3 normal = float3(ifft_input_output[global_idx].zw, 1).xzy;
+            float3 normal = float3(-ifft_input_output[global_idx].zw, 0).xzy;
             out_verts[vert_idx].normal = float4(normalize(normal), 1);
 
             // Now figure which quad you represent and register its triangles
@@ -186,5 +188,14 @@ void ms_main(
 //------------------------------------------------------------------------------------------------------
 
 float4 fs_main(OutputVertex input): SV_Target {
-    return float4(6/255.0, 66/255.0, 115/255.0, 1.0);
+    float4 ambient = float4(6/255.0, 66/255.0, 115/255.0, 1.0);
+
+    float3 sundot = normalize(float3(-0.8, 0.3, -0.3));
+    float3 light_dir = sundot - input.pos;
+    float3 reflect_dir = reflect(-light_dir, input.normal);
+
+    float3 view_dir = camera_pos.xyz - input.pos;
+    float specular = pow(max(dot(view_dir, reflect_dir), 0.0), 8);
+
+    return 0.5 * ambient + 0.5 * specular;
 }

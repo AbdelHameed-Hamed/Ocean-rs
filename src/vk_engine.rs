@@ -77,7 +77,7 @@ struct RenderObject {
 struct SceneData {
     view: Mat4,
     projection: Mat4,
-    fog_col: Vec4,
+    camera_pos: Vec4,
     fog_distances: Vec4,
     ambient_color: Vec4,
     sun_light_dir: Vec4,
@@ -794,7 +794,7 @@ impl VkEngine {
             .build();
 
         pipeline_builder.rasterizer =
-            vk_initializers::rasterization_state_create_info(vk::PolygonMode::LINE);
+            vk_initializers::rasterization_state_create_info(vk::PolygonMode::FILL);
 
         pipeline_builder.multisampling = vk_initializers::multisampling_state_create_info();
 
@@ -1208,7 +1208,7 @@ impl VkEngine {
         let mut scene_data: SceneData = std::mem::zeroed();
         scene_data.view = view;
         scene_data.projection = projection;
-        scene_data.fog_distances.x = L;
+        scene_data.camera_pos = Vec4::from_vec3(self.camera.pos, 0.0);
         scene_data.fog_distances.z = std::time::Instant::now()
             .duration_since(self.start)
             .as_millis() as f32
