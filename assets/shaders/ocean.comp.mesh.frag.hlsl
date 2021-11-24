@@ -155,7 +155,7 @@ void ms_main(
             // Transform the vertex and register it
             out_verts[vert_idx].pos = mul(
                 mul(projection, view),
-                float4(global_x, ifft_input_output[global_idx].x * 10, global_z, 1)
+                float4(global_x, ifft_input_output[global_idx].x, global_z, 1)
             );
 
             float3 normal = float3(-ifft_input_output[global_idx].zw, 0).xzy;
@@ -188,14 +188,5 @@ void ms_main(
 //------------------------------------------------------------------------------------------------------
 
 float4 fs_main(OutputVertex input): SV_Target {
-    float4 ambient = float4(6/255.0, 66/255.0, 115/255.0, 1.0);
-
-    float3 sundot = normalize(float3(-0.8, 0.3, -0.3));
-    float3 light_dir = sundot - input.pos;
-    float3 reflect_dir = reflect(-light_dir, input.normal);
-
-    float3 view_dir = camera_pos.xyz - input.pos;
-    float specular = pow(max(dot(view_dir, reflect_dir), 0.0), 8);
-
-    return 0.5 * ambient + 0.5 * specular;
+    return float4(input.normal.xyz, 1.0);
 }
