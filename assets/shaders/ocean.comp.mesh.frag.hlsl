@@ -7,29 +7,40 @@
 #define OCEAN_DIM_EXPONENT 9 // log_2(OCEAN_DIM)
 #define OCEAN_DIM_RECIPROCAL 0.001953125 // 1 / OCEAN_DIM
 
-// ToDo: Gotta rename things in this struct since they don't reflect the actual uses.
+// ToDo: Gotta rename things in this struct since they don't reflect the actual uses
 cbuffer SceneData: register(b0, space0) {
     column_major float4x4 view;
     column_major float4x4 projection;
     float4 camera_pos;
-    float4 fog_distances; //x for min, y for max, z for time, w is unused.
+    float4 fog_distances; //x: u, y: L, z: time, w: fov
     float4 ambient_color;
-    float4 sunlight_direction; //w for sun power
+    float4 sunlight_direction;
     float4 sunlight_color;
 };
 
+// xy: tilda_h at time 0, zw: wavenumber
 Texture2D<float4> waves: register(t0, space1);
-Texture2D<float> frequencies: register(t1, space1);
 
-RWTexture2D<float4> ifft_output_input: register(u2, space1);
-RWTexture2D<float4> ifft_input_output: register(u3, space1);
+// This implementation of the FFT algorithm requires two storage spaces for any single FFT being done.
+// This is because it first computes the FFT for every row, then the FFT for every column, which means
+// we might have a data race if we're not careful.
+
+// x: height, y: unused, zw: partial derivatives of height with respect to x and z
+RWTexture2D<float4> height_output_input: register(u1, space1);
+RWTexture2D<float4> height_input_output: register(u2, space1);
+
+// xy: displacement in x and z directions, z: partial derivative of x's displacement with respect to x
+// w: partial derivative of z's displacement with respect to z
+RWTexture2D<float4> displacement_output_input: register(u3, space1);
+RWTexture2D<float4> displacement_input_output: register(u4, space1);
 
 //------------------------------------------------------------------------------------------------------
 // Compute Shader
 //------------------------------------------------------------------------------------------------------
 
 // Based on https://github.com/asylum2010/Asylum_Tutorials/blob/master/Media/ShadersGL/fourier_fft.comp
-groupshared float4 pingpong[2][OCEAN_DIM];
+groupshared float4 height_pingpong[2][OCEAN_DIM];
+groupshared float4 displacement_pingpong[2][OCEAN_DIM];
 
 [[vk::push_constant]]
 struct {
@@ -40,30 +51,52 @@ struct {
 void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     if (flags.flags.x == 0) {
         // Calculate spectrum
-        uint2 loc1 = uint2(x, z);
-        uint2 loc2 = uint2(OCEAN_DIM - x, OCEAN_DIM - z);
+        uint2 loc1 = {x, z};
+        uint2 loc2 = {OCEAN_DIM - x, OCEAN_DIM - z};
 
-        float w_k_t = frequencies[loc1] * fog_distances.z;
+        float2 k = waves[loc1].zw;
 
+        float w_k_t = sqrt(9.81 * length(k)) * fog_distances.z;
+
+        float2 d = k;
+        if (abs(d.x - ((OCEAN_DIM >> 1) * TWO_PI / fog_distances.y)) <= 0.00001)
+            d.x = 0;
+        if (abs(d.y - ((OCEAN_DIM >> 1) * TWO_PI / fog_distances.y)) <= 0.00001)
+            d.y = 0;
+
+        // Calculate tilde_h at time t
         float2 tilde_h1 = waves[loc1].xy;
         float2 tilde_h2 = complex_conjugate(waves[loc2].xy);
 
-        // Calculate tilde_h at time t
-        pingpong[0][x].xy =
+        float2 tilde_h_t =
             complex_mul(tilde_h1, complex_exp(w_k_t)) +
             complex_mul(tilde_h2, complex_exp(-w_k_t));
 
-        // Calculate the partial derivative of the vertical component with respect to x and z at time t
-        pingpong[0][x].zw = complex_mul(waves[loc1].wz * float2(-1, 1), pingpong[0][x].xy);
+        height_pingpong[0][x].xy = tilde_h_t;
+
+        // Calculate the partial derivatives of the height with respect to x and z at time t
+        height_pingpong[0][x].zw = complex_mul(d.yx * float2(-1, 1), tilde_h_t);
+
+        // Calculate the xz displacement at time t
+        float2 d_t = complex_mul(d.yx / length(k) * float2(1, -1), tilde_h_t);
+        if (length(k) <= 0.00001)
+            d_t = float2(0, 0);
+
+        displacement_pingpong[0][x].xy = d_t;
+
+        // Calculate the partial derivatives of the displacement with respect to x and z at time t
+        displacement_pingpong[0][x].zw = complex_mul(d.yx * float2(-1, 1), d_t);
     }
 
     // Do IFFT
     // STEP 1: load row/column and reorder
     int nj = (reversebits(x) >> (32 - OCEAN_DIM_EXPONENT)) & (OCEAN_DIM - 1);
     if (flags.flags.x == 0) {
-        pingpong[1][nj] = pingpong[0][x];
+        height_pingpong[1][nj] = height_pingpong[0][x];
+        displacement_pingpong[1][nj] = displacement_pingpong[0][x];
     } else {
-        pingpong[1][nj] = ifft_output_input[uint2(x, z)];
+        height_pingpong[1][nj] = height_output_input[uint2(x, z)];
+        displacement_pingpong[1][nj] = displacement_output_input[uint2(x, z)];
     }
 
     GroupMemoryBarrierWithGroupSync();
@@ -80,18 +113,32 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
             float2 w_n_k = complex_exp(TWO_PI * x / m);
 
             // Height calculations
-            float2 even = pingpong[src][x].xy;
-            float2 odd = complex_mul(w_n_k, pingpong[src][x + mh].xy);
+            float2 even = height_pingpong[src][x].xy;
+            float2 odd = complex_mul(w_n_k, height_pingpong[src][x + mh].xy);
 
-            pingpong[1 - src][x].xy = even + odd;
-            pingpong[1 - src][x + mh].xy = even - odd;
+            height_pingpong[1 - src][x].xy = even + odd;
+            height_pingpong[1 - src][x + mh].xy = even - odd;
 
-            // Slope calculations
-            even = pingpong[src][x].zw;
-            odd = complex_mul(w_n_k, pingpong[src][x + mh].zw);
+            // Partial derivative of height with respect to x and z
+            even = height_pingpong[src][x].zw;
+            odd = complex_mul(w_n_k, height_pingpong[src][x + mh].zw);
 
-            pingpong[1 - src][x].zw = even + odd;
-            pingpong[1 - src][x + mh].zw = even - odd;
+            height_pingpong[1 - src][x].zw = even + odd;
+            height_pingpong[1 - src][x + mh].zw = even - odd;
+
+            // Displacement calculations
+            even = displacement_pingpong[src][x].xy;
+            odd = complex_mul(w_n_k, displacement_pingpong[src][x + mh].xy);
+
+            displacement_pingpong[1 - src][x].xy = even + odd;
+            displacement_pingpong[1 - src][x + mh].xy = even - odd;
+
+            // Partial derivative of displacement with respect to x and z
+            even = displacement_pingpong[src][x].zw;
+            odd = complex_mul(w_n_k, displacement_pingpong[src][x + mh].zw);
+
+            displacement_pingpong[1 - src][x].zw = even + odd;
+            displacement_pingpong[1 - src][x + mh].zw = even - odd;
         }
 
         src = 1 - src;
@@ -100,12 +147,17 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     }
 
     // STEP 3: write output
+    // Transpose the image
     uint2 idx = {z, x};
-    float4 result = pingpong[src][x];
+    float4 height_result = height_pingpong[src][x];
+    float4 displacement_result = displacement_pingpong[src][x];
     if (flags.flags.x == 0) {
-        ifft_output_input[idx] = result;
+        height_output_input[idx] = height_result;
+        displacement_output_input[idx] = displacement_result;
     } else {
-        ifft_input_output[idx] = result * (((x + z) & 1) == 1 ? -1 : 1);
+        float sign_correction = ((x + z) & 1) == 1 ? -1 : 1;
+        height_input_output[idx] = height_result * sign_correction;
+        displacement_input_output[idx] = displacement_result * sign_correction;
     }
 }
 
@@ -140,6 +192,8 @@ void ms_main(
     uint group_idx_x = group_id % (OCEAN_DIM / patch_dim);
     uint group_idx_z = group_id / (OCEAN_DIM / patch_dim);
 
+    const float u = fog_distances.x;
+
     // We start off by figuring where our vertices and triangles are, transform and register them.
     uint num_iterations = ceil(patch_vertex_count / 32.0);
     for (uint i = 0; i < num_iterations; ++i) {
@@ -155,10 +209,18 @@ void ms_main(
             // Transform the vertex and register it
             out_verts[vert_idx].pos = mul(
                 mul(projection, view),
-                float4(global_x, ifft_input_output[global_idx].x, global_z, 1)
+                float4(
+                    global_x + u * displacement_input_output[global_idx].x,
+                    height_input_output[global_idx].x * 15,
+                    global_z + u * displacement_input_output[global_idx].y,
+                    1
+                )
             );
 
-            float3 normal = float3(-ifft_input_output[global_idx].zw, 0).xzy;
+            float3 normal = float3(
+                -(height_input_output[global_idx].zw / (1 + u * displacement_input_output[global_idx].zw)),
+                1
+            ).xzy;
             out_verts[vert_idx].normal = float4(normalize(normal), 1);
 
             // Now figure which quad you represent and register its triangles

@@ -12,7 +12,7 @@ use ash::extensions::{
     khr::{Surface, Swapchain},
     nv::MeshShader,
 };
-use ash::version::{DeviceV1_0, InstanceV1_0, InstanceV1_1};
+use ash::version::{DeviceV1_0, InstanceV1_0};
 use ash::{vk, Device, Instance};
 use rand_distr::{Distribution, Normal};
 use sdl2::event::Event;
@@ -469,14 +469,11 @@ impl VkEngine {
 
         let mut waves: Vec<Vec4> =
             vec![unsafe { std::mem::zeroed() }; (OCEAN_PATCH_DIM + 1) * (OCEAN_PATCH_DIM + 1)];
-        let mut frequencies: Vec<f32> =
-            vec![unsafe { std::mem::zeroed() }; (OCEAN_PATCH_DIM + 1) * (OCEAN_PATCH_DIM + 1)];
 
         let amplitude = 0.45 * 1e-3;
         let wind_speed = 6.5;
         let wind_direction = Vec2 { x: -0.4, y: -0.9 };
-        let g = 9.81;
-        let l = wind_speed * wind_speed / g;
+        let l = wind_speed * wind_speed / 9.81;
         let l_minor_waves = l / 1000.0;
         let start = OCEAN_PATCH_DIM as f32 / 2.0;
 
@@ -512,28 +509,14 @@ impl VkEngine {
                 );
 
                 let tilde_h_zero = Complex { real: r1, imag: r2 } * h_zero_k;
-                let frequency = f32::sqrt(g * k.length());
-
-                let d_x = if k.x == (OCEAN_PATCH_DIM / 2) as f32 * TWO_PI / L {
-                    0.0
-                } else {
-                    k.x
-                };
-
-                let d_z = if k.y == (OCEAN_PATCH_DIM / 2) as f32 * TWO_PI / L {
-                    0.0
-                } else {
-                    k.y
-                };
 
                 let idx = i * (OCEAN_PATCH_DIM + 1) + j;
                 waves[idx] = Vec4 {
                     x: tilde_h_zero.real,
                     y: tilde_h_zero.imag,
-                    z: d_x,
-                    w: d_z,
+                    z: k.x,
+                    w: k.y,
                 };
-                frequencies[idx] = frequency;
             }
         }
 
@@ -543,30 +526,37 @@ impl VkEngine {
             1,
             vk::ShaderStageFlags::COMPUTE,
         );
-        let frequencies_binding = vk_initializers::descriptor_set_layout_binding(
-            vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+        let height_output_input_binding = vk_initializers::descriptor_set_layout_binding(
+            vk::DescriptorType::STORAGE_IMAGE,
             1,
             1,
             vk::ShaderStageFlags::COMPUTE,
         );
-        let ifft_output_input_binding = vk_initializers::descriptor_set_layout_binding(
+        let height_input_output_binding = vk_initializers::descriptor_set_layout_binding(
             vk::DescriptorType::STORAGE_IMAGE,
             2,
             1,
-            vk::ShaderStageFlags::COMPUTE,
+            vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::MESH_NV,
         );
-        let ifft_input_output_binding = vk_initializers::descriptor_set_layout_binding(
+        let displacement_output_input_binding = vk_initializers::descriptor_set_layout_binding(
             vk::DescriptorType::STORAGE_IMAGE,
             3,
+            1,
+            vk::ShaderStageFlags::COMPUTE,
+        );
+        let displacement_input_output_binding = vk_initializers::descriptor_set_layout_binding(
+            vk::DescriptorType::STORAGE_IMAGE,
+            4,
             1,
             vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::MESH_NV,
         );
 
         let bindings = [
             waves_binding,
-            frequencies_binding,
-            ifft_output_input_binding,
-            ifft_input_output_binding,
+            height_output_input_binding,
+            height_input_output_binding,
+            displacement_output_input_binding,
+            displacement_input_output_binding,
         ];
         let waves_descriptor_layout_info =
             vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
@@ -637,51 +627,7 @@ impl VkEngine {
             .image_info(&infos)
             .build();
 
-        let frequencies_size = (size_of::<f32>() * frequencies.len()) as u64;
-        let (temp_buffer, temp_buffer_memory) = vk_initializers::create_buffer(
-            &instance,
-            physical_device,
-            &device,
-            frequencies_size,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        );
-
-        unsafe {
-            let data_ptr = device
-                .map_memory(
-                    temp_buffer_memory,
-                    0,
-                    frequencies_size,
-                    vk::MemoryMapFlags::empty(),
-                )
-                .unwrap() as *mut f32;
-            data_ptr.copy_from_nonoverlapping(frequencies.as_ptr(), frequencies.len());
-            device.unmap_memory(temp_buffer_memory);
-        }
-
-        let frequencies_info = Self::add_texture(
-            &instance,
-            physical_device,
-            &device,
-            command_pool,
-            graphics_queue,
-            waves_extent,
-            vk::Format::R32_SFLOAT,
-            Some(temp_buffer),
-            Some(temp_buffer_memory),
-            "frequencies",
-            &mut textures,
-        );
-        let infos = [frequencies_info];
-        let frequencies_set_write = vk::WriteDescriptorSet::builder()
-            .dst_set(waves_descriptor_set)
-            .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(&infos)
-            .build();
-
-        let ifft_output_input_info = Self::add_texture(
+        let height_output_input_info = Self::add_texture(
             &instance,
             physical_device,
             &device,
@@ -691,18 +637,39 @@ impl VkEngine {
             vk::Format::R32G32B32A32_SFLOAT,
             None,
             None,
-            "ifft_output_input",
+            "height_output_input",
             &mut textures,
         );
-        let infos = [ifft_output_input_info];
-        let ifft_output_input_set_write = vk::WriteDescriptorSet::builder()
+        let infos = [height_output_input_info];
+        let height_output_input_set_write = vk::WriteDescriptorSet::builder()
+            .dst_set(waves_descriptor_set)
+            .dst_binding(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .image_info(&infos)
+            .build();
+
+        let height_input_output_info = Self::add_texture(
+            &instance,
+            physical_device,
+            &device,
+            command_pool,
+            graphics_queue,
+            waves_extent,
+            vk::Format::R32G32B32A32_SFLOAT,
+            None,
+            None,
+            "height_input_output",
+            &mut textures,
+        );
+        let infos = [height_input_output_info];
+        let height_input_output_set_write = vk::WriteDescriptorSet::builder()
             .dst_set(waves_descriptor_set)
             .dst_binding(2)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .image_info(&infos)
             .build();
 
-        let ifft_input_output_info = Self::add_texture(
+        let displacement_output_input_info = Self::add_texture(
             &instance,
             physical_device,
             &device,
@@ -712,13 +679,34 @@ impl VkEngine {
             vk::Format::R32G32B32A32_SFLOAT,
             None,
             None,
-            "ifft_input_output",
+            "displacement_output_input",
             &mut textures,
         );
-        let infos = [ifft_input_output_info];
-        let ifft_input_output_set_write = vk::WriteDescriptorSet::builder()
+        let infos = [displacement_output_input_info];
+        let displacement_output_input_set_write = vk::WriteDescriptorSet::builder()
             .dst_set(waves_descriptor_set)
             .dst_binding(3)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .image_info(&infos)
+            .build();
+
+        let displacement_input_output_info = Self::add_texture(
+            &instance,
+            physical_device,
+            &device,
+            command_pool,
+            graphics_queue,
+            waves_extent,
+            vk::Format::R32G32B32A32_SFLOAT,
+            None,
+            None,
+            "displacement_input_output",
+            &mut textures,
+        );
+        let infos = [displacement_input_output_info];
+        let displacement_input_output_set_write = vk::WriteDescriptorSet::builder()
+            .dst_set(waves_descriptor_set)
+            .dst_binding(4)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .image_info(&infos)
             .build();
@@ -727,9 +715,10 @@ impl VkEngine {
             device.update_descriptor_sets(
                 &[
                     waves_set_write,
-                    frequencies_set_write,
-                    ifft_output_input_set_write,
-                    ifft_input_output_set_write,
+                    height_output_input_set_write,
+                    height_input_output_set_write,
+                    displacement_output_input_set_write,
+                    displacement_input_output_set_write,
                 ],
                 &[],
             )
@@ -1209,6 +1198,8 @@ impl VkEngine {
         scene_data.view = view;
         scene_data.projection = projection;
         scene_data.camera_pos = Vec4::from_vec3(self.camera.pos, 0.0);
+        scene_data.fog_distances.x = -3.0;
+        scene_data.fog_distances.y = L;
         scene_data.fog_distances.z = std::time::Instant::now()
             .duration_since(self.start)
             .as_millis() as f32
