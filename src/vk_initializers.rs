@@ -1,4 +1,5 @@
 extern crate ash;
+extern crate hassle_rs;
 extern crate sdl2;
 
 use ash::extensions::{
@@ -8,6 +9,7 @@ use ash::extensions::{
 };
 use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0};
 use ash::{vk, vk::Handle, Device, Entry, Instance};
+use hassle_rs::compile_hlsl;
 use sdl2::video::Window;
 use std::borrow::Cow;
 use std::ffi::{CStr, CString};
@@ -419,8 +421,26 @@ pub fn create_command_pool_and_buffer(
     return (command_pool, command_buffers);
 }
 
-pub fn create_shader_module(device: &Device, filepath: &str) -> vk::ShaderModule {
-    let shader_binary_as_bytes = std::fs::read(filepath).unwrap();
+pub fn create_shader_module(
+    device: &Device,
+    filepath: &str,
+    shader_name: &str,
+    entry_point: &str,
+    target_profile: &str,
+    args: &Vec<&str>,
+    defines: &Vec<(&str, Option<&str>)>,
+) -> vk::ShaderModule {
+    let shader_text = std::fs::read_to_string(filepath).unwrap();
+    let shader_binary_as_bytes = compile_hlsl(
+        shader_name,
+        shader_text.as_str(),
+        entry_point,
+        target_profile,
+        &args,
+        &defines,
+    )
+    .unwrap();
+
     // !Note: This might bite me later due to endianess.
     let (_, shader_binary, _) = unsafe { shader_binary_as_bytes.align_to::<u32>() };
 

@@ -87,6 +87,8 @@ struct SceneData {
 const FRAME_OVERLAP: usize = 2;
 const MAX_OBJECTS: usize = 10_000;
 const OCEAN_PATCH_DIM: usize = 512;
+const OCEAN_PATCH_DIM_EXPONENT: u8 = 9;
+const OCEAN_PATCH_DIM_RECIPROCAL: f32 = 0.001953125;
 const L: f32 = 20.0;
 const TWO_PI: f32 = std::f32::consts::PI * 2.0;
 
@@ -724,26 +726,44 @@ impl VkEngine {
             )
         };
 
-        let push_constant_ranges = [vk::PushConstantRange::builder()
-            .stage_flags(vk::ShaderStageFlags::COMPUTE)
-            .size(size_of::<Vec4>() as u32)
-            .build()];
-
         let ocean_pipeline_layout = unsafe {
             device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::builder()
-                        .set_layouts(&[global_set_layout, waves_descriptor_layout])
-                        .push_constant_ranges(&push_constant_ranges),
+                        .set_layouts(&[global_set_layout, waves_descriptor_layout]),
                     None,
                 )
                 .unwrap()
         };
 
-        let ocean_mesh_shader_module =
-            vk_initializers::create_shader_module(&device, "./shaders/ocean.mesh.spv");
-        let ocean_fragment_shader_module =
-            vk_initializers::create_shader_module(&device, "./shaders/ocean.frag.spv");
+        let shader_args = vec!["-spirv", "-Zi", "-Od", "-enable-16bit-types"];
+        let ocean_dim = OCEAN_PATCH_DIM.to_string();
+        let ocean_dim_exponent = OCEAN_PATCH_DIM_EXPONENT.to_string();
+        let ocean_dim_reciprocal = OCEAN_PATCH_DIM_RECIPROCAL.to_string();
+        let shader_defines = vec![
+            ("OCEAN_DIM", Some(ocean_dim.as_str())),
+            ("OCEAN_DIM_EXPONENT", Some(ocean_dim_exponent.as_str())),
+            ("OCEAN_DIM_RECIPROCAL", Some(ocean_dim_reciprocal.as_str())),
+        ];
+
+        let ocean_mesh_shader_module = vk_initializers::create_shader_module(
+            &device,
+            "./assets/shaders/ocean.comp.mesh.frag.hlsl",
+            "ocean",
+            "ms_main",
+            "ms_6_5",
+            &shader_args,
+            &shader_defines,
+        );
+        let ocean_fragment_shader_module = vk_initializers::create_shader_module(
+            &device,
+            "./assets/shaders/ocean.comp.mesh.frag.hlsl",
+            "ocean",
+            "fs_main",
+            "ps_6_5",
+            &shader_args,
+            &shader_defines,
+        );
 
         let mut pipeline_builder = VkPipelineBuilder::default();
 
@@ -809,10 +829,24 @@ impl VkEngine {
                 .unwrap()
         };
 
-        let skybox_mesh_shader_module =
-            vk_initializers::create_shader_module(&device, "./shaders/skybox.mesh.spv");
-        let skybox_fragment_shader_module =
-            vk_initializers::create_shader_module(&device, "./shaders/skybox.frag.spv");
+        let skybox_mesh_shader_module = vk_initializers::create_shader_module(
+            &device,
+            "./assets/shaders/skybox.mesh.frag.hlsl",
+            "skybox",
+            "ms_main",
+            "ms_6_5",
+            &shader_args,
+            &vec![],
+        );
+        let skybox_fragment_shader_module = vk_initializers::create_shader_module(
+            &device,
+            "./assets/shaders/skybox.mesh.frag.hlsl",
+            "skybox",
+            "fs_main",
+            "ps_6_5",
+            &shader_args,
+            &vec![],
+        );
 
         pipeline_builder.shader_stages.clear();
         pipeline_builder
@@ -844,18 +878,48 @@ impl VkEngine {
             device.destroy_shader_module(skybox_fragment_shader_module, None);
         };
 
-        let spectrum_and_ifft_shader_module =
-            vk_initializers::create_shader_module(&device, "./shaders/ocean.comp.spv");
-
-        let spectrum_and_ifft_pipline_create_info = vk::ComputePipelineCreateInfo::builder()
+        let mut spectrum_shader_defines = shader_defines.clone();
+        spectrum_shader_defines.push(("CALCULATE_SPECTRUM_AND_ROW_IFFT", None));
+        let spectrum_and_row_ifft_shader_module = vk_initializers::create_shader_module(
+            &device,
+            "./assets/shaders/ocean.comp.mesh.frag.hlsl",
+            "ocean",
+            "cs_main",
+            "cs_6_5",
+            &shader_args,
+            &spectrum_shader_defines,
+        );
+        let spectrum_and_row_ifft_pipline_create_info = vk::ComputePipelineCreateInfo::builder()
             .stage(vk_initializers::pipeline_shader_stage_create_info(
                 vk::ShaderStageFlags::COMPUTE,
-                spectrum_and_ifft_shader_module,
+                spectrum_and_row_ifft_shader_module,
                 "cs_main\0",
             ))
             .layout(ocean_pipeline_layout)
             .build();
-        let compute_infos = [spectrum_and_ifft_pipline_create_info];
+
+        let column_ifft_shader_module = vk_initializers::create_shader_module(
+            &device,
+            "./assets/shaders/ocean.comp.mesh.frag.hlsl",
+            "ocean",
+            "cs_main",
+            "cs_6_5",
+            &shader_args,
+            &shader_defines,
+        );
+        let column_ifft_pipline_create_info = vk::ComputePipelineCreateInfo::builder()
+            .stage(vk_initializers::pipeline_shader_stage_create_info(
+                vk::ShaderStageFlags::COMPUTE,
+                column_ifft_shader_module,
+                "cs_main\0",
+            ))
+            .layout(ocean_pipeline_layout)
+            .build();
+
+        let compute_infos = [
+            spectrum_and_row_ifft_pipline_create_info,
+            column_ifft_pipline_create_info,
+        ];
         let compute_pipelines = unsafe {
             device
                 .create_compute_pipelines(vk::PipelineCache::null(), &compute_infos, None)
@@ -863,7 +927,8 @@ impl VkEngine {
         };
 
         unsafe {
-            device.destroy_shader_module(spectrum_and_ifft_shader_module, None);
+            device.destroy_shader_module(spectrum_and_row_ifft_shader_module, None);
+            device.destroy_shader_module(column_ifft_shader_module, None);
         };
 
         let camera = Camera::default();
@@ -1239,20 +1304,6 @@ impl VkEngine {
             ],
             &[scene_data_offset as u32],
         );
-        self.device.cmd_push_constants(
-            frame_data.command_buffer,
-            self.materials["ocean"].pipeline_layout,
-            vk::ShaderStageFlags::COMPUTE,
-            0,
-            &[Vec4 {
-                x: 0.0f32,
-                y: 0.0f32,
-                z: 0.0f32,
-                w: 0.0f32,
-            }]
-            .align_to::<u8>()
-            .1, // Forgive me, father, for I have sinned.
-        );
         self.device
             .cmd_dispatch(frame_data.command_buffer, OCEAN_PATCH_DIM as u32, 1, 1);
 
@@ -1272,19 +1323,10 @@ impl VkEngine {
         );
 
         // Column ifft phase
-        self.device.cmd_push_constants(
+        self.device.cmd_bind_pipeline(
             frame_data.command_buffer,
-            self.materials["ocean"].pipeline_layout,
-            vk::ShaderStageFlags::COMPUTE,
-            0,
-            &[Vec4 {
-                x: 1.0f32,
-                y: 0.0f32,
-                z: 0.0f32,
-                w: 0.0f32,
-            }]
-            .align_to::<u8>()
-            .1, // Forgive me, father, for I have sinned.
+            vk::PipelineBindPoint::COMPUTE,
+            self.compute_pipelines[1],
         );
         self.device
             .cmd_dispatch(frame_data.command_buffer, OCEAN_PATCH_DIM as u32, 1, 1);

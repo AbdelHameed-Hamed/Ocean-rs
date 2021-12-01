@@ -1,11 +1,29 @@
 // Reference:
+// Ocean Surface Generation and Rendering - Thomas Gamper
 // https://www.cg.tuwien.ac.at/research/publications/2018/GAMPER-2018-OSG/GAMPER-2018-OSG-thesis.pdf
 
-#include "complex.hlsl"
+#define TWO_PI 6.283185307179586476925286766559
 
-#define OCEAN_DIM 512
-#define OCEAN_DIM_EXPONENT 9 // log_2(OCEAN_DIM)
-#define OCEAN_DIM_RECIPROCAL 0.001953125 // 1 / OCEAN_DIM
+float2 complex_mul(float2 lhs, float2 rhs) {
+    float2 result = {
+        lhs.x * rhs.x - lhs.y * rhs.y,
+        lhs.x * rhs.y + lhs.y * rhs.x
+    };
+
+    return result;
+}
+
+float2 complex_exp(float imag) {
+    float2 result = { cos(imag), sin(imag) };
+
+    return result;
+}
+
+float2 complex_conjugate(float2 self) {
+    float2 result = { self.x, -self.y };
+
+    return result;
+}
 
 // ToDo: Gotta rename things in this struct since they don't reflect the actual uses
 cbuffer SceneData: register(b0, space0) {
@@ -43,14 +61,9 @@ RWTexture2D<float4> derivatives_input_output: register(u4, space1);
 groupshared float4 displacement_pingpong[2][OCEAN_DIM];
 groupshared float4 derivatives_pingpong[2][OCEAN_DIM];
 
-[[vk::push_constant]]
-struct {
-    float4 flags;
-} flags;
-
 [numthreads(OCEAN_DIM, 1, 1)]
 void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
-    if (flags.flags.x == 0) {
+    #ifdef CALCULATE_SPECTRUM_AND_ROW_IFFT
         // Calculate spectrum
         uint2 loc1 = {x, z};
         uint2 loc2 = {OCEAN_DIM - x, OCEAN_DIM - z};
@@ -80,18 +93,18 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
 
         // Calculate the partial derivatives of xz displacements with respect to xz at time t
         derivatives_pingpong[0][x].zw = complex_mul(k.yx * float2(-1, 1), d_t);
-    }
+    #endif
 
     // Do IFFT
     // STEP 1: load row/column and reorder
     int nj = (reversebits(x) >> (32 - OCEAN_DIM_EXPONENT)) & (OCEAN_DIM - 1);
-    if (flags.flags.x == 0) {
+    #ifdef CALCULATE_SPECTRUM_AND_ROW_IFFT
         displacement_pingpong[1][nj] = displacement_pingpong[0][x];
         derivatives_pingpong[1][nj] = derivatives_pingpong[0][x];
-    } else {
+    #else
         displacement_pingpong[1][nj] = displacement_output_input[uint2(x, z)];
         derivatives_pingpong[1][nj] = derivatives_output_input[uint2(x, z)];
-    }
+    #endif
 
     GroupMemoryBarrierWithGroupSync();
 
@@ -145,14 +158,14 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     uint2 idx = {z, x};
     float4 displacement_result = displacement_pingpong[src][x];
     float4 derivatives_result = derivatives_pingpong[src][x];
-    if (flags.flags.x == 0) {
+    #ifdef CALCULATE_SPECTRUM_AND_ROW_IFFT
         displacement_output_input[idx] = displacement_result;
         derivatives_output_input[idx] = derivatives_result;
-    } else {
+    #else
         float sign_correction = ((x + z) & 1) == 1 ? -1 : 1;
         displacement_input_output[idx] = (displacement_result * sign_correction).zxwy;
         derivatives_input_output[idx] = derivatives_result * sign_correction;
-    }
+    #endif
 }
 
 //------------------------------------------------------------------------------------------------------
@@ -198,14 +211,14 @@ void ms_main(
 
             uint global_x = group_idx_x * patch_dim + x + 1 - group_idx_x;
             uint global_z = group_idx_z * patch_dim + z + 1 - group_idx_z;
-            uint2 global_idx = {(global_z - 1), (global_x - 1)};
+            uint2 global_idx = {global_z - 1, global_x - 1};
 
             // Transform the vertex and register it
             out_verts[vert_idx].pos = mul(
                 mul(projection, view),
                 float4(
                     global_x + u * displacement_input_output[global_idx].x,
-                    displacement_input_output[global_idx].y * 15,
+                    displacement_input_output[global_idx].y * 8,
                     global_z + u * displacement_input_output[global_idx].z,
                     1
                 )
@@ -232,7 +245,7 @@ void ms_main(
                 );
 
                 // Upper triangle, counter clockwise order
-                out_tris[(quad_idx * 2) + 1] = uint3(
+                out_tris[quad_idx * 2 + 1] = uint3(
                     vert_idx,                 // Upper left corner
                     vert_idx + patch_dim + 1, // Lower right corner
                     vert_idx + 1              // Upper right corner
@@ -247,5 +260,5 @@ void ms_main(
 //------------------------------------------------------------------------------------------------------
 
 float4 fs_main(OutputVertex input): SV_Target {
-    return float4(input.normal.xyz, 1.0);
+    return input.normal;
 }
