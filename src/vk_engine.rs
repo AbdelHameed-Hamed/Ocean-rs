@@ -85,12 +85,15 @@ struct SceneData {
 }
 
 const FRAME_OVERLAP: usize = 2;
-const MAX_OBJECTS: usize = 10_000;
 const OCEAN_PATCH_DIM: usize = 512;
-const OCEAN_PATCH_DIM_EXPONENT: u8 = 9;
-const OCEAN_PATCH_DIM_RECIPROCAL: f32 = 0.001953125;
+// Only works for powers of 2
+const OCEAN_PATCH_DIM_EXPONENT: u8 = (OCEAN_PATCH_DIM - 1).count_ones() as u8;
+const OCEAN_PATCH_DIM_RECIPROCAL: f32 = 1.0 / (OCEAN_PATCH_DIM as f32);
 const L: f32 = 20.0;
 const TWO_PI: f32 = std::f32::consts::PI * 2.0;
+
+const OCEAN_SHADER_SRC: &str = include_str!(".././assets/shaders/ocean.comp.mesh.frag.hlsl");
+const SKYBOX_SHADER_SRC: &str = include_str!(".././assets/shaders/skybox.mesh.frag.hlsl");
 
 struct FrameData {
     present_semaphore: vk::Semaphore,
@@ -748,7 +751,7 @@ impl VkEngine {
 
         let ocean_mesh_shader_module = vk_initializers::create_shader_module(
             &device,
-            "./assets/shaders/ocean.comp.mesh.frag.hlsl",
+            OCEAN_SHADER_SRC,
             "ocean",
             "ms_main",
             "ms_6_5",
@@ -757,7 +760,7 @@ impl VkEngine {
         );
         let ocean_fragment_shader_module = vk_initializers::create_shader_module(
             &device,
-            "./assets/shaders/ocean.comp.mesh.frag.hlsl",
+            OCEAN_SHADER_SRC,
             "ocean",
             "fs_main",
             "ps_6_5",
@@ -831,7 +834,7 @@ impl VkEngine {
 
         let skybox_mesh_shader_module = vk_initializers::create_shader_module(
             &device,
-            "./assets/shaders/skybox.mesh.frag.hlsl",
+            SKYBOX_SHADER_SRC,
             "skybox",
             "ms_main",
             "ms_6_5",
@@ -840,7 +843,7 @@ impl VkEngine {
         );
         let skybox_fragment_shader_module = vk_initializers::create_shader_module(
             &device,
-            "./assets/shaders/skybox.mesh.frag.hlsl",
+            SKYBOX_SHADER_SRC,
             "skybox",
             "fs_main",
             "ps_6_5",
@@ -882,7 +885,7 @@ impl VkEngine {
         spectrum_shader_defines.push(("CALCULATE_SPECTRUM_AND_ROW_IFFT", None));
         let spectrum_and_row_ifft_shader_module = vk_initializers::create_shader_module(
             &device,
-            "./assets/shaders/ocean.comp.mesh.frag.hlsl",
+            OCEAN_SHADER_SRC,
             "ocean",
             "cs_main",
             "cs_6_5",
@@ -900,7 +903,7 @@ impl VkEngine {
 
         let column_ifft_shader_module = vk_initializers::create_shader_module(
             &device,
-            "./assets/shaders/ocean.comp.mesh.frag.hlsl",
+            OCEAN_SHADER_SRC,
             "ocean",
             "cs_main",
             "cs_6_5",

@@ -177,9 +177,9 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
 // Note: There's gonna be a bit of an overlap, this is necessary to ensure that the topology of the edge
 // triangles is accounted for, i.e., without this overlap you'd have individual disconnected patches
 // instead of one mega connected patch.
-#define patch_dim 16
-#define patch_vertex_count (patch_dim * patch_dim)
-#define patch_triangle_count ((patch_dim - 1) * (patch_dim - 1) * 2)
+#define PATCH_DIM 16
+#define PATCH_VERTEX_COUNT (PATCH_DIM * PATCH_DIM)
+#define PATCH_TRIANGLE_COUNT ((PATCH_DIM - 1) * (PATCH_DIM - 1) * 2)
 
 struct OutputVertex {
     float4 pos: SV_Position;
@@ -191,26 +191,26 @@ struct OutputVertex {
 void ms_main(
     in uint group_thread_id: SV_GroupThreadID,
     in uint group_id: SV_GroupID,
-    out vertices OutputVertex out_verts[patch_vertex_count],
-    out indices uint3 out_tris[patch_triangle_count])
+    out vertices OutputVertex out_verts[PATCH_VERTEX_COUNT],
+    out indices uint3 out_tris[PATCH_TRIANGLE_COUNT])
 {
-    SetMeshOutputCounts(patch_vertex_count, patch_triangle_count);
+    SetMeshOutputCounts(PATCH_VERTEX_COUNT, PATCH_TRIANGLE_COUNT);
 
-    uint group_idx_x = group_id % (OCEAN_DIM / patch_dim);
-    uint group_idx_z = group_id / (OCEAN_DIM / patch_dim);
+    uint group_idx_x = group_id % (OCEAN_DIM / PATCH_DIM);
+    uint group_idx_z = group_id / (OCEAN_DIM / PATCH_DIM);
 
     const float u = fog_distances.x;
 
     // We start off by figuring where our vertices and triangles are, transform and register them.
-    uint num_iterations = ceil(patch_vertex_count / 32.0);
+    uint num_iterations = ceil(PATCH_VERTEX_COUNT / 32.0);
     for (uint i = 0; i < num_iterations; ++i) {
         uint vert_idx = group_thread_id * num_iterations + i;
-        if (vert_idx < patch_vertex_count) {
-            uint x = vert_idx % patch_dim;
-            uint z = vert_idx / patch_dim;
+        if (vert_idx < PATCH_VERTEX_COUNT) {
+            uint x = vert_idx % PATCH_DIM;
+            uint z = vert_idx / PATCH_DIM;
 
-            uint global_x = group_idx_x * patch_dim + x + 1 - group_idx_x;
-            uint global_z = group_idx_z * patch_dim + z + 1 - group_idx_z;
+            uint global_x = group_idx_x * PATCH_DIM + x + 1 - group_idx_x;
+            uint global_z = group_idx_z * PATCH_DIM + z + 1 - group_idx_z;
             uint2 global_idx = {global_z - 1, global_x - 1};
 
             // Transform the vertex and register it
@@ -234,20 +234,20 @@ void ms_main(
             out_verts[vert_idx].normal = float4(normalize(normal), 1);
 
             // Now figure which quad you represent and register its triangles
-            if (x < (patch_dim - 1) && z < (patch_dim - 1)) {
-                uint quad_idx = z * (patch_dim - 1) + x;
+            if (x < (PATCH_DIM - 1) && z < (PATCH_DIM - 1)) {
+                uint quad_idx = z * (PATCH_DIM - 1) + x;
 
                 // Lower triangle, counter clockwise order
                 out_tris[quad_idx * 2] = uint3(
                     vert_idx,                 // Upper left corner
-                    vert_idx + patch_dim,     // Lower Left corner
-                    vert_idx + patch_dim + 1  // Lower right corner
+                    vert_idx + PATCH_DIM,     // Lower Left corner
+                    vert_idx + PATCH_DIM + 1  // Lower right corner
                 );
 
                 // Upper triangle, counter clockwise order
                 out_tris[quad_idx * 2 + 1] = uint3(
                     vert_idx,                 // Upper left corner
-                    vert_idx + patch_dim + 1, // Lower right corner
+                    vert_idx + PATCH_DIM + 1, // Lower right corner
                     vert_idx + 1              // Upper right corner
                 );
             }

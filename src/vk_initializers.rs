@@ -423,17 +423,16 @@ pub fn create_command_pool_and_buffer(
 
 pub fn create_shader_module(
     device: &Device,
-    filepath: &str,
+    shader_src: &str,
     shader_name: &str,
     entry_point: &str,
     target_profile: &str,
     args: &Vec<&str>,
     defines: &Vec<(&str, Option<&str>)>,
 ) -> vk::ShaderModule {
-    let shader_text = std::fs::read_to_string(filepath).unwrap();
     let shader_binary_as_bytes = compile_hlsl(
         shader_name,
-        shader_text.as_str(),
+        shader_src,
         entry_point,
         target_profile,
         &args,
