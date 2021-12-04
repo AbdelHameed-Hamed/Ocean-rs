@@ -1,11 +1,12 @@
 extern crate ash;
+extern crate imgui;
 extern crate rand;
 extern crate rand_distr;
 extern crate sdl2;
 
 use crate::math::fft::Complex;
 use crate::math::lin_alg::{Mat4, Vec2, Vec3, Vec4};
-use crate::vk_initializers;
+use crate::{imgui_backend, vk_initializers};
 
 use ash::extensions::{
     ext::DebugUtils,
@@ -131,6 +132,48 @@ struct Camera {
     fov: f32,
 }
 
+impl Camera {
+    fn handle_event(&mut self, event: &sdl2::event::Event, delta_time: f32) {
+        match *event {
+            Event::MouseMotion {
+                xrel: x, yrel: y, ..
+            } => {
+                // Note: I'm not sure if xrel and yrel account for deltas between frames.
+                let sensitivity = 0.1;
+                self.yaw += sensitivity * x as f32;
+                self.pitch = (self.pitch + sensitivity * y as f32).clamp(-89.0, 89.0);
+                self.front = Vec3 {
+                    x: self.yaw.to_radians().cos(),
+                    y: self.pitch.to_radians().sin(),
+                    z: self.yaw.to_radians().sin() * self.pitch.to_radians().cos(),
+                }
+            }
+            Event::MouseWheel { y: scroll_y, .. } => {
+                self.fov = (self.fov - scroll_y as f32).clamp(1.0, 60.0);
+            }
+            Event::KeyDown {
+                keycode: Some(pressed_key),
+                ..
+            } => {
+                let camera_speed = 100.0 * delta_time;
+                if pressed_key == Keycode::W {
+                    self.pos += self.front * camera_speed;
+                }
+                if pressed_key == Keycode::S {
+                    self.pos -= self.front * camera_speed;
+                }
+                if pressed_key == Keycode::A {
+                    self.pos -= Vec3::cross(self.front, self.up).normal() * camera_speed;
+                }
+                if pressed_key == Keycode::D {
+                    self.pos += Vec3::cross(self.front, self.up).normal() * camera_speed;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 impl Default for Camera {
     fn default() -> Self {
         #[rustfmt::skip]
@@ -250,7 +293,6 @@ pub struct VkEngine {
 impl VkEngine {
     pub fn new(width: u32, height: u32) -> VkEngine {
         let (sdl_context, window) = vk_initializers::create_sdl_window(width, height);
-        sdl_context.mouse().set_relative_mouse_mode(true);
 
         let (entry, instance) = vk_initializers::create_instance(&window);
 
@@ -1452,12 +1494,24 @@ impl VkEngine {
     pub fn run(&mut self) {
         let mut event_pump = self.sdl_context.event_pump().unwrap();
 
+        let mut imgui = imgui::Context::create();
+        imgui.set_ini_filename(None);
+        let window_size = self.window.size();
+        let drawable_size = self.window.drawable_size();
+        imgui.io_mut().display_framebuffer_scale = [
+            drawable_size.0 as f32 / window_size.0 as f32,
+            drawable_size.1 as f32 / window_size.1 as f32,
+        ];
+        imgui.io_mut().display_size = [window_size.0 as f32, window_size.1 as f32];
+
         'running: loop {
             let current_timestamp = std::time::Instant::now();
             let delta_time = current_timestamp
                 .duration_since(self.last_timestamp)
-                .as_millis() as f32
-                / 1000.0;
+                .as_secs_f32();
+            imgui
+                .io_mut()
+                .update_delta_time(current_timestamp - self.last_timestamp);
             self.last_timestamp = current_timestamp;
 
             for event in event_pump.poll_iter() {
@@ -1469,47 +1523,11 @@ impl VkEngine {
                     } => {
                         break 'running;
                     }
-                    Event::MouseMotion {
-                        xrel: x, yrel: y, ..
-                    } => {
-                        // Note: I'm not sure if xrel and yrel account for deltas between frames.
-                        let sensitivity = 0.1;
-                        self.camera.yaw += sensitivity * x as f32;
-                        self.camera.pitch =
-                            (self.camera.pitch + sensitivity * y as f32).clamp(-89.0, 89.0);
-                        self.camera.front = Vec3 {
-                            x: self.camera.yaw.to_radians().cos(),
-                            y: self.camera.pitch.to_radians().sin(),
-                            z: self.camera.yaw.to_radians().sin()
-                                * self.camera.pitch.to_radians().cos(),
-                        }
+
+                    _ => {
+                        self.camera.handle_event(&event, delta_time);
+                        imgui_backend::handle_event(imgui.io_mut(), &event);
                     }
-                    Event::MouseWheel { y: scroll_y, .. } => {
-                        self.camera.fov = (self.camera.fov - scroll_y as f32).clamp(1.0, 60.0);
-                    }
-                    Event::KeyDown {
-                        keycode: Some(pressed_key),
-                        ..
-                    } => {
-                        let camera_speed = 100.0 * delta_time;
-                        if pressed_key == Keycode::W {
-                            self.camera.pos += self.camera.front * camera_speed;
-                        }
-                        if pressed_key == Keycode::S {
-                            self.camera.pos -= self.camera.front * camera_speed;
-                        }
-                        if pressed_key == Keycode::A {
-                            self.camera.pos -= Vec3::cross(self.camera.front, self.camera.up)
-                                .normal()
-                                * camera_speed;
-                        }
-                        if pressed_key == Keycode::D {
-                            self.camera.pos += Vec3::cross(self.camera.front, self.camera.up)
-                                .normal()
-                                * camera_speed;
-                        }
-                    }
-                    _ => {}
                 }
             }
 
