@@ -6,7 +6,7 @@ extern crate sdl2;
 
 use crate::math::fft::Complex;
 use crate::math::lin_alg::{Mat4, Vec2, Vec3, Vec4};
-use crate::{imgui_backend, vk_initializers};
+use crate::{imgui_backend, vk_helpers::*};
 
 use ash::extensions::{
     ext::DebugUtils,
@@ -21,22 +21,6 @@ use sdl2::keyboard::Keycode;
 use sdl2::video::Window;
 use std::collections::HashMap;
 use std::mem::size_of;
-
-struct VkBuffer {
-    buffer: vk::Buffer,
-    buffer_memory: vk::DeviceMemory,
-}
-
-struct VkImage {
-    image: vk::Image,
-    image_memory: vk::DeviceMemory,
-}
-
-struct VkTexture {
-    image: VkImage,
-    image_view: vk::ImageView,
-    sampler: vk::Sampler,
-}
 
 #[repr(align(16))]
 struct Vertex {
@@ -188,71 +172,6 @@ impl Default for Camera {
     }
 }
 
-struct VkPipelineBuilder {
-    shader_stages: Vec<vk::PipelineShaderStageCreateInfo>,
-    vertex_input_info: vk::PipelineVertexInputStateCreateInfo,
-    input_assembly: vk::PipelineInputAssemblyStateCreateInfo,
-    viewport: vk::Viewport,
-    scissor: vk::Rect2D,
-    rasterizer: vk::PipelineRasterizationStateCreateInfo,
-    color_blend_attachment: vk::PipelineColorBlendAttachmentState,
-    multisampling: vk::PipelineMultisampleStateCreateInfo,
-    depth_stencil_state: vk::PipelineDepthStencilStateCreateInfo,
-    pipeline_layout: vk::PipelineLayout,
-}
-
-impl VkPipelineBuilder {
-    pub fn default() -> VkPipelineBuilder {
-        return VkPipelineBuilder {
-            shader_stages: Vec::<vk::PipelineShaderStageCreateInfo>::default(),
-            vertex_input_info: vk::PipelineVertexInputStateCreateInfo::default(),
-            input_assembly: vk::PipelineInputAssemblyStateCreateInfo::default(),
-            viewport: vk::Viewport::default(),
-            scissor: vk::Rect2D::default(),
-            rasterizer: vk::PipelineRasterizationStateCreateInfo::default(),
-            color_blend_attachment: vk::PipelineColorBlendAttachmentState::default(),
-            multisampling: vk::PipelineMultisampleStateCreateInfo::default(),
-            depth_stencil_state: vk::PipelineDepthStencilStateCreateInfo::default(),
-            pipeline_layout: vk::PipelineLayout::default(),
-        };
-    }
-
-    pub fn build_pipline(&self, render_pass: &vk::RenderPass, device: &Device) -> vk::Pipeline {
-        let viewports = [self.viewport];
-        let scissors = [self.scissor];
-        let viewport_state_create_info = vk::PipelineViewportStateCreateInfo::builder()
-            .viewports(&viewports)
-            .scissors(&scissors);
-
-        let attachments = [self.color_blend_attachment];
-        let color_blend_state_create_info = vk::PipelineColorBlendStateCreateInfo::builder()
-            .logic_op_enable(false)
-            .logic_op(vk::LogicOp::COPY)
-            .attachments(&attachments);
-
-        let pipeline_create_info = vk::GraphicsPipelineCreateInfo::builder()
-            .stages(self.shader_stages.as_slice())
-            .vertex_input_state(&self.vertex_input_info)
-            .input_assembly_state(&self.input_assembly)
-            .viewport_state(&viewport_state_create_info)
-            .rasterization_state(&self.rasterizer)
-            .multisample_state(&self.multisampling)
-            .color_blend_state(&color_blend_state_create_info)
-            .depth_stencil_state(&self.depth_stencil_state)
-            .layout(self.pipeline_layout)
-            .render_pass(*render_pass)
-            .build();
-        let pipeline_create_infos = [pipeline_create_info];
-        let pipeline = unsafe {
-            device
-                .create_graphics_pipelines(vk::PipelineCache::null(), &pipeline_create_infos, None)
-                .unwrap()
-        };
-
-        return pipeline[0];
-    }
-}
-
 pub struct VkEngine {
     sdl_context: sdl2::Sdl,
     window: Window,
@@ -288,21 +207,22 @@ pub struct VkEngine {
     compute_pipelines: Vec<vk::Pipeline>,
     start: std::time::Instant,
     textures: HashMap<String, VkTexture>,
+    imgui_ctx: imgui::Context,
+    imgui_renderer: imgui_backend::Renderer,
 }
 
 impl VkEngine {
     pub fn new(width: u32, height: u32) -> VkEngine {
-        let (sdl_context, window) = vk_initializers::create_sdl_window(width, height);
+        let (sdl_context, window) = create_sdl_window(width, height);
 
-        let (entry, instance) = vk_initializers::create_instance(&window);
+        let (entry, instance) = create_instance(&window);
 
-        let (debug_utils_loader, debug_callback) =
-            vk_initializers::create_debug_layer(&entry, &instance);
+        let (debug_utils_loader, debug_callback) = create_debug_layer(&entry, &instance);
 
-        let (surface, surface_loader) = vk_initializers::create_surface(&window, &entry, &instance);
+        let (surface, surface_loader) = create_surface(&window, &entry, &instance);
 
         let (physical_device, queue_family_index) =
-            vk_initializers::get_physical_device_and_graphics_queue_family_index(
+            get_physical_device_and_graphics_queue_family_index(
                 &instance,
                 &surface_loader,
                 &surface,
@@ -311,8 +231,7 @@ impl VkEngine {
         let physical_device_properties =
             unsafe { instance.get_physical_device_properties(physical_device) };
 
-        let device =
-            vk_initializers::create_device(queue_family_index, &instance, &physical_device);
+        let device = create_device(queue_family_index, &instance, &physical_device);
 
         let surface_format = unsafe {
             surface_loader
@@ -320,7 +239,7 @@ impl VkEngine {
                 .unwrap()[0]
         };
 
-        let (swapchain_loader, swapchain) = vk_initializers::create_swapchain_loader_and_swapchain(
+        let (swapchain_loader, swapchain) = create_swapchain_loader_and_swapchain(
             &surface_loader,
             &physical_device,
             &surface,
@@ -332,11 +251,8 @@ impl VkEngine {
         );
 
         let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(swapchain).unwrap() };
-        let swapchain_image_views = vk_initializers::create_swapchain_image_views(
-            &swapchain_images,
-            &surface_format,
-            &device,
-        );
+        let swapchain_image_views =
+            create_swapchain_image_views(&swapchain_images, &surface_format, &device);
 
         let depth_image_extent = vk::Extent3D::builder()
             .width(width)
@@ -345,24 +261,20 @@ impl VkEngine {
             .build();
         let depth_image_format = vk::Format::D32_SFLOAT;
 
-        let depth_image_create_info = vk_initializers::create_image_create_info(
+        let depth_image_create_info = create_image_create_info(
             depth_image_format,
             vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
             depth_image_extent,
         );
-        let (depth_image, depth_image_memory) = vk_initializers::create_image(
+        let depth_image = create_image(
             &instance,
             physical_device,
             &device,
             depth_image_create_info,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         );
-        let depth_image = VkImage {
-            image: depth_image,
-            image_memory: depth_image_memory,
-        };
 
-        let depth_image_view_create_info = vk_initializers::create_image_view_create_info(
+        let depth_image_view_create_info = create_image_view_create_info(
             depth_image_format,
             depth_image.image,
             vk::ImageAspectFlags::DEPTH,
@@ -373,9 +285,9 @@ impl VkEngine {
                 .unwrap()
         };
 
-        let render_pass = vk_initializers::create_renderpass(&surface_format, &device);
+        let render_pass = create_renderpass(&surface_format, &device);
 
-        let framebuffers = vk_initializers::create_framebuffers(
+        let framebuffers = create_framebuffers(
             &swapchain_image_views,
             depth_image_view,
             &render_pass,
@@ -386,7 +298,7 @@ impl VkEngine {
 
         let graphics_queue = unsafe { device.get_device_queue(queue_family_index, 0) };
 
-        let scene_buffer_binding = vk_initializers::descriptor_set_layout_binding(
+        let scene_buffer_binding = descriptor_set_layout_binding(
             vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
             0,
             1,
@@ -403,7 +315,7 @@ impl VkEngine {
                 .unwrap()
         };
 
-        let object_buffer_binding = vk_initializers::descriptor_set_layout_binding(
+        let object_buffer_binding = descriptor_set_layout_binding(
             vk::DescriptorType::STORAGE_BUFFER,
             0,
             1,
@@ -452,9 +364,12 @@ impl VkEngine {
                 .unwrap()[0]
         };
 
-        let scene_param_buffer_size = FRAME_OVERLAP
-            * Self::return_aligned_size(physical_device_properties, size_of::<SceneData>());
-        let (scene_param_buffer, scene_param_buffer_memory) = vk_initializers::create_buffer(
+        let scene_param_buffer_size =
+            FRAME_OVERLAP * return_aligned_size(physical_device_properties, size_of::<SceneData>());
+        let VkBuffer {
+            buffer: scene_param_buffer,
+            buffer_memory: scene_param_buffer_memory,
+        } = create_buffer(
             &instance,
             physical_device,
             &device,
@@ -478,11 +393,8 @@ impl VkEngine {
 
         unsafe { device.update_descriptor_sets(&[scene_set_write], &[]) };
 
-        let (command_pool, command_buffers) = vk_initializers::create_command_pool_and_buffer(
-            queue_family_index,
-            &device,
-            FRAME_OVERLAP as u32,
-        );
+        let (command_pool, command_buffers) =
+            create_command_pool_and_buffer(queue_family_index, &device, FRAME_OVERLAP as u32);
         let mut frame_data: [FrameData; FRAME_OVERLAP] = unsafe { std::mem::zeroed() };
         for i in 0..FRAME_OVERLAP {
             let semaphore_create_info = vk::SemaphoreCreateInfo::default();
@@ -567,31 +479,31 @@ impl VkEngine {
             }
         }
 
-        let waves_binding = vk_initializers::descriptor_set_layout_binding(
+        let waves_binding = descriptor_set_layout_binding(
             vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             0,
             1,
             vk::ShaderStageFlags::COMPUTE,
         );
-        let height_output_input_binding = vk_initializers::descriptor_set_layout_binding(
+        let height_output_input_binding = descriptor_set_layout_binding(
             vk::DescriptorType::STORAGE_IMAGE,
             1,
             1,
             vk::ShaderStageFlags::COMPUTE,
         );
-        let height_input_output_binding = vk_initializers::descriptor_set_layout_binding(
+        let height_input_output_binding = descriptor_set_layout_binding(
             vk::DescriptorType::STORAGE_IMAGE,
             2,
             1,
             vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::MESH_NV,
         );
-        let displacement_output_input_binding = vk_initializers::descriptor_set_layout_binding(
+        let displacement_output_input_binding = descriptor_set_layout_binding(
             vk::DescriptorType::STORAGE_IMAGE,
             3,
             1,
             vk::ShaderStageFlags::COMPUTE,
         );
-        let displacement_input_output_binding = vk_initializers::descriptor_set_layout_binding(
+        let displacement_input_output_binding = descriptor_set_layout_binding(
             vk::DescriptorType::STORAGE_IMAGE,
             4,
             1,
@@ -624,7 +536,7 @@ impl VkEngine {
         };
 
         let waves_size = (size_of::<Vec4>() * waves.len()) as u64;
-        let (temp_buffer, temp_buffer_memory) = vk_initializers::create_buffer(
+        let staging_buffer = create_buffer(
             &instance,
             physical_device,
             &device,
@@ -636,14 +548,14 @@ impl VkEngine {
         unsafe {
             let data_ptr = device
                 .map_memory(
-                    temp_buffer_memory,
+                    staging_buffer.buffer_memory,
                     0,
                     waves_size,
                     vk::MemoryMapFlags::empty(),
                 )
                 .unwrap() as *mut Vec4;
             data_ptr.copy_from_nonoverlapping(waves.as_ptr(), waves.len());
-            device.unmap_memory(temp_buffer_memory);
+            device.unmap_memory(staging_buffer.buffer_memory);
         }
 
         let mut textures = HashMap::<String, VkTexture>::new();
@@ -653,7 +565,7 @@ impl VkEngine {
             height: (OCEAN_PATCH_DIM + 1) as u32,
             depth: 1,
         };
-        let waves_info = Self::add_texture(
+        let waves_info = add_texture(
             &instance,
             physical_device,
             &device,
@@ -661,8 +573,7 @@ impl VkEngine {
             graphics_queue,
             waves_extent,
             vk::Format::R32G32B32A32_SFLOAT,
-            Some(temp_buffer),
-            Some(temp_buffer_memory),
+            Some(staging_buffer),
             "waves",
             &mut textures,
         );
@@ -674,7 +585,7 @@ impl VkEngine {
             .image_info(&infos)
             .build();
 
-        let height_output_input_info = Self::add_texture(
+        let height_output_input_info = add_texture(
             &instance,
             physical_device,
             &device,
@@ -682,7 +593,6 @@ impl VkEngine {
             graphics_queue,
             waves_extent,
             vk::Format::R32G32B32A32_SFLOAT,
-            None,
             None,
             "height_output_input",
             &mut textures,
@@ -695,7 +605,7 @@ impl VkEngine {
             .image_info(&infos)
             .build();
 
-        let height_input_output_info = Self::add_texture(
+        let height_input_output_info = add_texture(
             &instance,
             physical_device,
             &device,
@@ -703,7 +613,6 @@ impl VkEngine {
             graphics_queue,
             waves_extent,
             vk::Format::R32G32B32A32_SFLOAT,
-            None,
             None,
             "height_input_output",
             &mut textures,
@@ -716,7 +625,7 @@ impl VkEngine {
             .image_info(&infos)
             .build();
 
-        let displacement_output_input_info = Self::add_texture(
+        let displacement_output_input_info = add_texture(
             &instance,
             physical_device,
             &device,
@@ -724,7 +633,6 @@ impl VkEngine {
             graphics_queue,
             waves_extent,
             vk::Format::R32G32B32A32_SFLOAT,
-            None,
             None,
             "displacement_output_input",
             &mut textures,
@@ -737,7 +645,7 @@ impl VkEngine {
             .image_info(&infos)
             .build();
 
-        let displacement_input_output_info = Self::add_texture(
+        let displacement_input_output_info = add_texture(
             &instance,
             physical_device,
             &device,
@@ -745,7 +653,6 @@ impl VkEngine {
             graphics_queue,
             waves_extent,
             vk::Format::R32G32B32A32_SFLOAT,
-            None,
             None,
             "displacement_input_output",
             &mut textures,
@@ -781,7 +688,7 @@ impl VkEngine {
                 .unwrap()
         };
 
-        let shader_args = vec!["-spirv", "-Zi", "-Od", "-enable-16bit-types"];
+        let shader_args = vec!["-spirv", "-Zi", "-Od"];
         let ocean_dim = OCEAN_PATCH_DIM.to_string();
         let ocean_dim_exponent = OCEAN_PATCH_DIM_EXPONENT.to_string();
         let ocean_dim_reciprocal = OCEAN_PATCH_DIM_RECIPROCAL.to_string();
@@ -791,7 +698,7 @@ impl VkEngine {
             ("OCEAN_DIM_RECIPROCAL", Some(ocean_dim_reciprocal.as_str())),
         ];
 
-        let ocean_mesh_shader_module = vk_initializers::create_shader_module(
+        let ocean_mesh_shader_module = create_shader_module(
             &device,
             OCEAN_SHADER_SRC,
             "ocean",
@@ -800,7 +707,7 @@ impl VkEngine {
             &shader_args,
             &shader_defines,
         );
-        let ocean_fragment_shader_module = vk_initializers::create_shader_module(
+        let ocean_fragment_shader_module = create_shader_module(
             &device,
             OCEAN_SHADER_SRC,
             "ocean",
@@ -814,23 +721,23 @@ impl VkEngine {
 
         pipeline_builder
             .shader_stages
-            .push(vk_initializers::pipeline_shader_stage_create_info(
+            .push(pipeline_shader_stage_create_info(
                 vk::ShaderStageFlags::MESH_NV,
                 ocean_mesh_shader_module,
                 "ms_main\0",
             ));
         pipeline_builder
             .shader_stages
-            .push(vk_initializers::pipeline_shader_stage_create_info(
+            .push(pipeline_shader_stage_create_info(
                 vk::ShaderStageFlags::FRAGMENT,
                 ocean_fragment_shader_module,
                 "fs_main\0",
             ));
 
-        pipeline_builder.vertex_input_info = vk_initializers::vertex_input_state_create_info();
+        pipeline_builder.vertex_input_info = vertex_input_state_create_info();
 
         pipeline_builder.input_assembly =
-            vk_initializers::input_assembly_create_info(&vk::PrimitiveTopology::TRIANGLE_LIST);
+            input_assembly_create_info(&vk::PrimitiveTopology::TRIANGLE_LIST);
 
         let (width_f32, height_f32) = (width as f32, height as f32);
         pipeline_builder.viewport = vk::Viewport::builder()
@@ -847,14 +754,13 @@ impl VkEngine {
             .extent(vk::Extent2D { width, height })
             .build();
 
-        pipeline_builder.rasterizer =
-            vk_initializers::rasterization_state_create_info(vk::PolygonMode::FILL);
+        pipeline_builder.rasterizer = rasterization_state_create_info(vk::PolygonMode::FILL);
 
-        pipeline_builder.multisampling = vk_initializers::multisampling_state_create_info();
+        pipeline_builder.multisampling = multisampling_state_create_info();
 
-        pipeline_builder.color_blend_attachment = vk_initializers::color_blend_attachment_state();
+        pipeline_builder.color_blend_attachment = color_blend_attachment_state();
 
-        pipeline_builder.depth_stencil_state = vk_initializers::create_depth_stencil_create_info();
+        pipeline_builder.depth_stencil_state = create_depth_stencil_create_info();
 
         pipeline_builder.pipeline_layout = ocean_pipeline_layout;
 
@@ -874,7 +780,7 @@ impl VkEngine {
                 .unwrap()
         };
 
-        let skybox_mesh_shader_module = vk_initializers::create_shader_module(
+        let skybox_mesh_shader_module = create_shader_module(
             &device,
             SKYBOX_SHADER_SRC,
             "skybox",
@@ -883,7 +789,7 @@ impl VkEngine {
             &shader_args,
             &vec![],
         );
-        let skybox_fragment_shader_module = vk_initializers::create_shader_module(
+        let skybox_fragment_shader_module = create_shader_module(
             &device,
             SKYBOX_SHADER_SRC,
             "skybox",
@@ -896,21 +802,20 @@ impl VkEngine {
         pipeline_builder.shader_stages.clear();
         pipeline_builder
             .shader_stages
-            .push(vk_initializers::pipeline_shader_stage_create_info(
+            .push(pipeline_shader_stage_create_info(
                 vk::ShaderStageFlags::MESH_NV,
                 skybox_mesh_shader_module,
                 "ms_main\0",
             ));
         pipeline_builder
             .shader_stages
-            .push(vk_initializers::pipeline_shader_stage_create_info(
+            .push(pipeline_shader_stage_create_info(
                 vk::ShaderStageFlags::FRAGMENT,
                 skybox_fragment_shader_module,
                 "fs_main\0",
             ));
 
-        pipeline_builder.rasterizer =
-            vk_initializers::rasterization_state_create_info(vk::PolygonMode::FILL);
+        pipeline_builder.rasterizer = rasterization_state_create_info(vk::PolygonMode::FILL);
 
         pipeline_builder.depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::default();
 
@@ -925,7 +830,7 @@ impl VkEngine {
 
         let mut spectrum_shader_defines = shader_defines.clone();
         spectrum_shader_defines.push(("CALCULATE_SPECTRUM_AND_ROW_IFFT", None));
-        let spectrum_and_row_ifft_shader_module = vk_initializers::create_shader_module(
+        let spectrum_and_row_ifft_shader_module = create_shader_module(
             &device,
             OCEAN_SHADER_SRC,
             "ocean",
@@ -935,7 +840,7 @@ impl VkEngine {
             &spectrum_shader_defines,
         );
         let spectrum_and_row_ifft_pipline_create_info = vk::ComputePipelineCreateInfo::builder()
-            .stage(vk_initializers::pipeline_shader_stage_create_info(
+            .stage(pipeline_shader_stage_create_info(
                 vk::ShaderStageFlags::COMPUTE,
                 spectrum_and_row_ifft_shader_module,
                 "cs_main\0",
@@ -943,7 +848,7 @@ impl VkEngine {
             .layout(ocean_pipeline_layout)
             .build();
 
-        let column_ifft_shader_module = vk_initializers::create_shader_module(
+        let column_ifft_shader_module = create_shader_module(
             &device,
             OCEAN_SHADER_SRC,
             "ocean",
@@ -953,7 +858,7 @@ impl VkEngine {
             &shader_defines,
         );
         let column_ifft_pipline_create_info = vk::ComputePipelineCreateInfo::builder()
-            .stage(vk_initializers::pipeline_shader_stage_create_info(
+            .stage(pipeline_shader_stage_create_info(
                 vk::ShaderStageFlags::COMPUTE,
                 column_ifft_shader_module,
                 "cs_main\0",
@@ -992,6 +897,22 @@ impl VkEngine {
                 pipeline: skybox_pipeline,
                 pipeline_layout: skybox_pipeline_layout,
             },
+        );
+
+        let mut imgui_ctx = imgui_backend::create_platform(&window);
+
+        let imgui_renderer = imgui_backend::Renderer::init_renderer(
+            &mut imgui_ctx,
+            &instance,
+            physical_device,
+            &device,
+            command_pool,
+            graphics_queue,
+            descriptor_pool,
+            &mut textures,
+            &shader_args,
+            &mut pipeline_builder,
+            render_pass,
         );
 
         let mesh_shader = MeshShader::new(&instance, &device);
@@ -1038,145 +959,15 @@ impl VkEngine {
             compute_pipelines,
             start: std::time::Instant::now(),
             textures,
-        };
-    }
-
-    fn return_aligned_size(
-        physical_device_properties: vk::PhysicalDeviceProperties,
-        original_size: usize,
-    ) -> usize {
-        let min_ubo_alignment = physical_device_properties
-            .limits
-            .min_uniform_buffer_offset_alignment as usize;
-        let aligned_size = if min_ubo_alignment > 0 {
-            (original_size + min_ubo_alignment - 1) & !(min_ubo_alignment - 1)
-        } else {
-            original_size
-        };
-
-        return aligned_size;
-    }
-
-    fn add_texture(
-        instance: &Instance,
-        physical_device: vk::PhysicalDevice,
-        device: &Device,
-        command_pool: vk::CommandPool,
-        graphics_queue: vk::Queue,
-        extent: vk::Extent3D,
-        format: vk::Format,
-        temp_buffer: Option<vk::Buffer>,
-        temp_buffer_memory: Option<vk::DeviceMemory>,
-        name: &str,
-        textures: &mut HashMap<String, VkTexture>,
-    ) -> vk::DescriptorImageInfo {
-        let texture_img_info = vk_initializers::create_image_create_info(
-            format,
-            vk::ImageUsageFlags::SAMPLED
-                | vk::ImageUsageFlags::TRANSFER_DST
-                | vk::ImageUsageFlags::STORAGE,
-            extent,
-        );
-        let (texture_img, texture_memory) = vk_initializers::create_image(
-            &instance,
-            physical_device,
-            &device,
-            texture_img_info,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        );
-        let texture_img = VkImage {
-            image: texture_img,
-            image_memory: texture_memory,
-        };
-
-        let image_layout;
-        if let (Some(temp_buffer), Some(temp_buffer_memory)) = (temp_buffer, temp_buffer_memory) {
-            vk_initializers::transition_image_layout(
-                &device,
-                command_pool,
-                graphics_queue,
-                texture_img.image,
-                vk::ImageLayout::UNDEFINED,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            );
-            vk_initializers::copy_buffer_to_image(
-                &device,
-                command_pool,
-                graphics_queue,
-                temp_buffer,
-                texture_img.image,
-                extent,
-            );
-            unsafe {
-                vk_initializers::free_buffer_and_memory(&device, temp_buffer, temp_buffer_memory)
-            };
-            vk_initializers::transition_image_layout(
-                &device,
-                command_pool,
-                graphics_queue,
-                texture_img.image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            );
-
-            image_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
-        } else {
-            vk_initializers::transition_image_layout(
-                &device,
-                command_pool,
-                graphics_queue,
-                texture_img.image,
-                vk::ImageLayout::UNDEFINED,
-                vk::ImageLayout::GENERAL,
-            );
-
-            image_layout = vk::ImageLayout::GENERAL;
-        }
-
-        let texture_image_view_info = vk_initializers::create_image_view_create_info(
-            format,
-            texture_img.image,
-            vk::ImageAspectFlags::COLOR,
-        );
-        let texture_image_view = unsafe {
-            device
-                .create_image_view(&texture_image_view_info, None)
-                .unwrap()
-        };
-
-        let texture_sampler_info = vk::SamplerCreateInfo {
-            mag_filter: vk::Filter::NEAREST,
-            min_filter: vk::Filter::NEAREST,
-            address_mode_u: vk::SamplerAddressMode::CLAMP_TO_BORDER,
-            address_mode_v: vk::SamplerAddressMode::CLAMP_TO_BORDER,
-            address_mode_w: vk::SamplerAddressMode::CLAMP_TO_BORDER,
-            border_color: vk::BorderColor::FLOAT_OPAQUE_WHITE,
-            unnormalized_coordinates: vk::TRUE,
-            compare_enable: vk::FALSE,
-            compare_op: vk::CompareOp::NEVER,
-            mipmap_mode: vk::SamplerMipmapMode::NEAREST,
-            ..Default::default()
-        };
-        let texture_sampler =
-            unsafe { device.create_sampler(&texture_sampler_info, None).unwrap() };
-
-        let texture = VkTexture {
-            image: texture_img,
-            image_view: texture_image_view,
-            sampler: texture_sampler,
-        };
-        textures.insert(name.to_string(), texture);
-
-        return vk::DescriptorImageInfo {
-            image_layout: image_layout,
-            image_view: textures[name].image_view,
-            sampler: textures[name].sampler,
-            ..Default::default()
+            imgui_ctx,
+            imgui_renderer,
         };
     }
 
     pub unsafe fn cleanup(&mut self) {
         self.device.device_wait_idle().unwrap();
+
+        self.imgui_renderer.deinit_renderer(&self.device);
 
         self.device
             .destroy_descriptor_set_layout(self.global_set_layout, None);
@@ -1187,11 +978,7 @@ impl VkEngine {
         self.device
             .destroy_descriptor_pool(self.descriptor_pool, None);
 
-        vk_initializers::free_buffer_and_memory(
-            &self.device,
-            self.scene_data_buffer.buffer,
-            self.scene_data_buffer.buffer_memory,
-        );
+        free_buffer_and_memory(&self.device, &self.scene_data_buffer);
 
         self.device.destroy_command_pool(self.command_pool, None);
 
@@ -1202,11 +989,7 @@ impl VkEngine {
                 .destroy_semaphore(frame_data.render_semaphore, None);
             self.device.destroy_fence(frame_data.render_fence, None);
 
-            vk_initializers::free_buffer_and_memory(
-                &self.device,
-                frame_data.object_buffer.buffer,
-                frame_data.object_buffer.buffer_memory,
-            );
+            free_buffer_and_memory(&self.device, &frame_data.object_buffer);
         }
         for &framebuffer in self.framebuffers.iter() {
             self.device.destroy_framebuffer(framebuffer, None);
@@ -1317,7 +1100,7 @@ impl VkEngine {
         scene_data.fog_distances.w = self.camera.fov;
 
         let scene_data_offset =
-            (Self::return_aligned_size(self.physical_device_properties, size_of::<SceneData>())
+            (return_aligned_size(self.physical_device_properties, size_of::<SceneData>())
                 * frame_index) as u64;
         let scene_data_ptr = self
             .device
@@ -1461,6 +1244,12 @@ impl VkEngine {
             0,
         );
 
+        let ui = self.imgui_ctx.frame();
+        ui.button(":D");
+        let draw_data = ui.render();
+        self.imgui_renderer
+            .render(draw_data, &self.device, frame_data.command_buffer);
+
         self.device.cmd_end_render_pass(frame_data.command_buffer);
         self.device
             .end_command_buffer(frame_data.command_buffer)
@@ -1494,22 +1283,12 @@ impl VkEngine {
     pub fn run(&mut self) {
         let mut event_pump = self.sdl_context.event_pump().unwrap();
 
-        let mut imgui = imgui::Context::create();
-        imgui.set_ini_filename(None);
-        let window_size = self.window.size();
-        let drawable_size = self.window.drawable_size();
-        imgui.io_mut().display_framebuffer_scale = [
-            drawable_size.0 as f32 / window_size.0 as f32,
-            drawable_size.1 as f32 / window_size.1 as f32,
-        ];
-        imgui.io_mut().display_size = [window_size.0 as f32, window_size.1 as f32];
-
         'running: loop {
             let current_timestamp = std::time::Instant::now();
             let delta_time = current_timestamp
                 .duration_since(self.last_timestamp)
                 .as_secs_f32();
-            imgui
+            self.imgui_ctx
                 .io_mut()
                 .update_delta_time(current_timestamp - self.last_timestamp);
             self.last_timestamp = current_timestamp;
@@ -1526,7 +1305,7 @@ impl VkEngine {
 
                     _ => {
                         self.camera.handle_event(&event, delta_time);
-                        imgui_backend::handle_event(imgui.io_mut(), &event);
+                        imgui_backend::handle_event(self.imgui_ctx.io_mut(), &event);
                     }
                 }
             }
