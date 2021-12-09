@@ -1,11 +1,10 @@
 extern crate ash;
 extern crate imgui;
-extern crate rand;
-extern crate rand_distr;
 extern crate sdl2;
 
 use crate::math::fft::Complex;
 use crate::math::lin_alg::{Mat4, Vec2, Vec3, Vec4};
+use crate::math::rand;
 use crate::{imgui_backend, vk_helpers::*};
 
 use ash::extensions::{
@@ -436,7 +435,7 @@ impl VkEngine {
         let l_minor_waves = l / 1000.0;
         let start = OCEAN_PATCH_DIM as f32 / 2.0;
 
-        let normal = Normal::new(0.0, 1.0).unwrap();
+        let mut pcg_rng = rand::PCGRandom32::new();
 
         for i in 0..=OCEAN_PATCH_DIM {
             for j in 0..=OCEAN_PATCH_DIM {
@@ -462,10 +461,11 @@ impl VkEngine {
 
                 let h_zero_k = f32::sqrt(phillips_k) * std::f32::consts::FRAC_1_SQRT_2;
 
-                let (r1, r2) = (
-                    normal.sample(&mut rand::thread_rng()),
-                    normal.sample(&mut rand::thread_rng()),
+                let (u1, u2) = (
+                    pcg_rng.next() as f32 / u32::MAX as f32,
+                    pcg_rng.next() as f32 / u32::MAX as f32,
                 );
+                let (r1, r2) = rand::box_muller_rng(u1, u2);
 
                 let tilde_h_zero = Complex { real: r1, imag: r2 } * h_zero_k;
 
