@@ -1030,9 +1030,10 @@ impl VkEngine {
         scene_data.fog_distances.y = L;
         scene_data.fog_distances.z = std::time::Instant::now()
             .duration_since(self.start)
-            .as_millis() as f32
-            / 1000.0;
+            .as_secs_f32();
         scene_data.fog_distances.w = self.camera.fov;
+        scene_data.ambient_color.x = self.size.width as f32;
+        scene_data.ambient_color.y = self.size.height as f32;
 
         let scene_data_offset =
             (return_aligned_size(self.physical_device_properties, size_of::<SceneData>())

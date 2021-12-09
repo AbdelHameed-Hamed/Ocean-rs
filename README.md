@@ -1,7 +1,7 @@
 # ToDo
 
-- Get the skybox shader to work with arbitrary resolutions.
 - Maybe switch out the cooley-tukey FFT with a Stockham implementation?
+- Refactor SceneData cbuffer in shaders.
 - Smooth the camera movement.
 - Add better camera controls (e.g., only rotate when you're holding Ctrl + mouse movement).
 - Figure out why the fragment shader outputs very pixelated(?) colors and fix that.

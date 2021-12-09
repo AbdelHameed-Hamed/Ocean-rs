@@ -20,14 +20,14 @@ cbuffer SceneData: register(b0, space0) {
     row_major float4x4 view; // This isn't right.....
     column_major float4x4 projection;
     float4 fog_color;
-    float4 fog_distances; //x for min, y for max, z for time, and w for FoV.
+    float4 fog_distances;
     float4 ambient_color;
-    float4 sunlight_direction; //w for sun power
+    float4 sunlight_direction;
     float4 sunlight_color;
 };
 
 float4 fs_main(float4 frag_coord: SV_Position): SV_Target {
-    float2 screen_size = float2(1280, 720);
+    float2 screen_size = ambient_color.xy;
 
     // Camera position and direction.
     float fov = fog_distances.w * 3.1415927 / 180.0;
