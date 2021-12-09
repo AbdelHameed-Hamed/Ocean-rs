@@ -1,6 +1,5 @@
 # ToDo
 
-- Move Camera into its own file.
 - Get the skybox shader to work with arbitrary resolutions.
 - Maybe switch out the cooley-tukey FFT with a Stockham implementation?
 - Smooth the camera movement.

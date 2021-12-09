@@ -1,3 +1,4 @@
+mod camera;
 mod imgui_backend;
 mod math;
 mod obj_loader;
