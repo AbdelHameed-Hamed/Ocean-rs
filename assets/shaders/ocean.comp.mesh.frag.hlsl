@@ -111,6 +111,7 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     // STEP 2: perform butterfly passes
     int src = 1;
 
+    [unroll(OCEAN_DIM_EXPONENT)]
     for (int s = 1; s <= OCEAN_DIM_EXPONENT; ++s) {
         int m = 1L << s;            // butterfly group displacement
         int mh = m >> 1;            // butterfly group half displacement

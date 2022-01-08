@@ -10,6 +10,8 @@
 - Check Empirical directional wave spectra for computer graphics for better, more realistic waves.
 - Add realistic shading of the ocean surface.
 - Perhaps replace the simple skybox with something that simulates the sky based on Rayleigh scattering?
+- Perhaps add a way to specify what the pipeline will look like from the shaders?
+- Maybe do physical camera as is done [here](https://bitsquid.blogspot.com/2017/09/physical-cameras-in-stingray.html)?
 
 # References
 
