@@ -10,6 +10,7 @@ pub struct Camera {
     pub(crate) yaw: f32,
     pub(crate) pitch: f32,
     pub(crate) fov: f32,
+    pub(crate) rotate_camera: bool,
 }
 
 impl Camera {
@@ -18,6 +19,10 @@ impl Camera {
             Event::MouseMotion {
                 xrel: x, yrel: y, ..
             } => {
+                if self.rotate_camera == false {
+                    return;
+                }
+
                 // Note: I'm not sure if xrel and yrel account for deltas between frames.
                 let sensitivity = 0.1;
                 self.yaw += sensitivity * x as f32;
@@ -64,6 +69,7 @@ impl Default for Camera {
             yaw: -90.0,
             pitch: 0.0,
             fov: 45.0,
+            rotate_camera: false,
         };
     }
 }

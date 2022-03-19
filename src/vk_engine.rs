@@ -143,6 +143,8 @@ pub struct VkEngine {
     textures: HashMap<String, VkTexture>,
     imgui_ctx: imgui::Context,
     imgui_renderer: imgui_backend::Renderer,
+    time_factor: f32,
+    choppiness: f32,
 }
 
 impl VkEngine {
@@ -689,7 +691,7 @@ impl VkEngine {
             .extent(vk::Extent2D { width, height })
             .build();
 
-        pipeline_builder.rasterizer = rasterization_state_create_info(vk::PolygonMode::FILL);
+        pipeline_builder.rasterizer = rasterization_state_create_info(vk::PolygonMode::LINE);
 
         pipeline_builder.multisampling = multisampling_state_create_info();
 
@@ -896,6 +898,8 @@ impl VkEngine {
             textures,
             imgui_ctx,
             imgui_renderer,
+            time_factor: 1.0,
+            choppiness: -3.0,
         };
     }
 
@@ -977,6 +981,10 @@ impl VkEngine {
     }
 
     pub unsafe fn draw(&mut self) {
+        let ui = self.imgui_ctx.frame();
+        imgui::Slider::new("Time factor", 0.0, 1.0).build(&ui, &mut self.time_factor);
+        imgui::Slider::new("Choppiness", -10.0, 0.0).build(&ui, &mut self.choppiness);
+
         let frame_index = self.frame_count as usize % FRAME_OVERLAP;
         let frame_data = &self.frame_data[frame_index];
 
@@ -1026,11 +1034,12 @@ impl VkEngine {
         scene_data.view = view;
         scene_data.projection = projection;
         scene_data.camera_pos = Vec4::from_vec3(self.camera.pos, 0.0);
-        scene_data.fog_distances.x = -3.0;
+        scene_data.fog_distances.x = self.choppiness;
         scene_data.fog_distances.y = L;
         scene_data.fog_distances.z = std::time::Instant::now()
             .duration_since(self.start)
-            .as_secs_f32();
+            .as_secs_f32()
+            * self.time_factor;
         scene_data.fog_distances.w = self.camera.fov;
         scene_data.ambient_color.x = self.size.width as f32;
         scene_data.ambient_color.y = self.size.height as f32;
@@ -1180,8 +1189,6 @@ impl VkEngine {
             0,
         );
 
-        let ui = self.imgui_ctx.frame();
-        ui.button(":D");
         let draw_data = ui.render();
         self.imgui_renderer
             .render(draw_data, &self.device, frame_data.command_buffer);
@@ -1238,6 +1245,17 @@ impl VkEngine {
                     } => {
                         break 'running;
                     }
+
+                    Event::MouseButtonDown {
+                        mouse_btn: sdl2::mouse::MouseButton::Right,
+                        ..
+                    } => {
+                        self.camera.rotate_camera = true;
+                    }
+                    Event::MouseButtonUp {
+                        mouse_btn: sdl2::mouse::MouseButton::Right,
+                        ..
+                    } => self.camera.rotate_camera = false,
 
                     _ => {
                         self.camera.handle_event(&event, delta_time);
