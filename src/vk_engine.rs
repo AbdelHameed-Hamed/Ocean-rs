@@ -691,7 +691,7 @@ impl VkEngine {
             .extent(vk::Extent2D { width, height })
             .build();
 
-        pipeline_builder.rasterizer = rasterization_state_create_info(vk::PolygonMode::LINE);
+        pipeline_builder.rasterizer = rasterization_state_create_info(vk::PolygonMode::FILL);
 
         pipeline_builder.multisampling = multisampling_state_create_info();
 
@@ -899,7 +899,7 @@ impl VkEngine {
             imgui_ctx,
             imgui_renderer,
             time_factor: 1.0,
-            choppiness: -3.0,
+            choppiness: 0.0,
         };
     }
 

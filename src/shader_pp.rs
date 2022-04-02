@@ -1,4 +1,7 @@
-#[derive(Debug)]
+use core::slice::Iter;
+use std::{collections::HashMap, iter::Peekable};
+
+#[derive(Debug, Copy, Clone)]
 enum Token<'a> {
     At,
     Identifier(&'a str),
@@ -96,4 +99,126 @@ fn tokenize(shader_src: &str) -> Result<Vec<Token>, String> {
     } else {
         return Ok(Vec::new());
     }
+}
+
+enum ASTNode<'a> {
+    None,
+    Scope {
+        name: &'a str,
+        children_begin_idx: u32,
+        children_end_idx: u32,
+    },
+    Field {
+        name: &'a str,
+        register: (u8, u8),
+        type_idx: u32,
+    },
+    F32xN {
+        dimension: u8,
+    },
+}
+
+struct AST<'a> {
+    backing_buffer: Vec<ASTNode<'a>>,
+    types: HashMap<&'a str, u32>,
+}
+
+fn generate_ast(tokens: Vec<Token>) -> Result<AST, String> {
+    let mut res = AST {
+        backing_buffer: Vec::new(),
+        types: HashMap::new(),
+    };
+
+    let mut iter = tokens.iter().peekable();
+    while let Some(t) = iter.next() {
+        match t {
+            Token::At => {
+                let name = if let Some(t) = iter.next() {
+                    if let Token::Identifier(name) = t {
+                        name
+                    } else {
+                        ""
+                    }
+                } else {
+                    return Err("Incomplete @ scope".to_string());
+                };
+
+                let children_begin_idx = if let Some(&t) = iter.next() {
+                    if let Token::LCurlyBracket = t {
+                        res.backing_buffer.len() as u32
+                    } else {
+                        return Err(format!("Unexpected token {:?}, expected '{{' instead.", t));
+                    }
+                } else {
+                    return Err("Incomplete @ scope".to_string());
+                };
+
+                let idx = res.backing_buffer.len();
+                res.backing_buffer.push(ASTNode::None);
+
+                let node = ASTNode::Scope {
+                    name,
+                    children_begin_idx,
+                    children_end_idx: parse_scope(&mut iter, &mut res)?,
+                };
+                res.backing_buffer[idx] = node;
+            }
+            Token::Comma => continue,
+            _ => {
+                return Err(format!(
+                    "Unexpected token {:?}, expected '@' or ',' instead.",
+                    t
+                ))
+            }
+        }
+    }
+
+    return Ok(res);
+}
+
+fn parse_scope(iter: &mut Peekable<Iter<Token>>, ast: &mut AST) -> Result<u32, String> {
+    while let Some(&t) = iter.next() {
+        match t {
+            Token::Identifier(name) => {
+                if let Some(&t) = iter.next() {
+                    if let Token::LParan = t {
+                    } else {
+                        return Err(format!("Unexpected token {:?}, expected '(' instead.", t));
+                    }
+                } else {
+                    return Err("Incomplete field".to_string());
+                }
+            }
+            _ => {
+                return Err(format!("Unexpected token {:?}, expected an identifier.", t));
+            }
+        }
+    }
+
+    return Ok(ast.backing_buffer.len() as u32);
+}
+
+fn parse_field<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> Result<u32, String> {
+    let mut name = "";
+    let mut register = (0, 0);
+    let mut type_idx = 0;
+
+    while let Some(&t) = iter.next() {
+        match t {
+            Token::Identifier(ident) => name = ident,
+            Token::LParan | Token::Comma | Token::RParan | Token::Colons => continue,
+            Token::Number(u32) => (),
+            _ => {
+                return Err(format!("Unexpected token {:?}, expected an identifier.", t));
+            }
+        }
+    }
+
+    ast.backing_buffer.push(ASTNode::Field {
+        name,
+        register,
+        type_idx,
+    });
+
+    unimplemented!()
 }

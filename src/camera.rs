@@ -3,6 +3,7 @@ use crate::math::lin_alg::Vec3;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 
+#[derive(Debug)]
 pub struct Camera {
     pub(crate) pos: Vec3,
     pub(crate) front: Vec3,
@@ -31,7 +32,7 @@ impl Camera {
                     x: self.yaw.to_radians().cos(),
                     y: self.pitch.to_radians().sin(),
                     z: self.yaw.to_radians().sin() * self.pitch.to_radians().cos(),
-                }
+                };
             }
             Event::MouseWheel { y: scroll_y, .. } => {
                 self.fov = (self.fov - scroll_y as f32).clamp(1.0, 60.0);
@@ -62,14 +63,21 @@ impl Camera {
 impl Default for Camera {
     fn default() -> Self {
         #[rustfmt::skip]
-        return Camera {
-            pos: Vec3 { x: 0.0, y: 0.0, z: 3.0 },
+        let mut res = Camera {
+            pos: Vec3 { x: -130.0, y: -130.0, z: 7.0 },
             front: Vec3 { x: 0.0, y: 0.0, z: -1.0 },
             up: Vec3::up(),
-            yaw: -90.0,
-            pitch: 0.0,
+            yaw: 40.0,
+            pitch: 30.0,
             fov: 45.0,
             rotate_camera: false,
         };
+        res.front = Vec3 {
+            x: res.yaw.to_radians().cos(),
+            y: res.pitch.to_radians().sin(),
+            z: res.yaw.to_radians().sin() * res.pitch.to_radians().cos(),
+        };
+
+        return res;
     }
 }
