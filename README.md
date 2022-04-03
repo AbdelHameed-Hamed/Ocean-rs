@@ -11,7 +11,7 @@ First you need to have a few things installed.
 
 To build just type `cargo build` in the root of the folder.
 
-Note: Currently it'll only work on machines with Nvidia GPUs starting from the GTX-16XX. This is because mesh shaders are used instead of the typical vertex shaders. This restriction will fixed soon, howerver.
+Note: Currently it'll only work on machines with Nvidia GPUs starting from the GTX-16XX. This is because mesh shaders are used instead of the typical vertex shaders. This restriction will be fixed soon, howerver.
 
 # ToDo
 
