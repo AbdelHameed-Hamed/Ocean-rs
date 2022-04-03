@@ -1,3 +1,7 @@
+# Demo
+
+https://user-images.githubusercontent.com/18620914/161441943-ed51c5f8-a553-4a30-844f-d97dc705c74f.mp4
+
 # ToDo
 
 - Maybe switch out the cooley-tukey FFT with a Stockham implementation?
