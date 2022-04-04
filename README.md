@@ -4,12 +4,12 @@ https://user-images.githubusercontent.com/18620914/161441943-ed51c5f8-a553-4a30-
 
 # Building
 
-First you need to have a few things installed.
+First, you need to have a few things installed.
 - [Rust](https://www.rust-lang.org/)
 - [Vulkan SDK](https://www.lunarg.com/vulkan-sdk/)
 - SDL2 if you're on Linux.
 
-To build just type `cargo build` in the root of the folder.
+To build just use `cargo build` in the root directory.
 
 Note: Currently it'll only work on machines with Nvidia GPUs starting from the GTX-16XX. This is because mesh shaders are used instead of the typical vertex shaders. This restriction will be fixed soon, howerver.
 
