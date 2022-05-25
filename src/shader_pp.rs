@@ -1,7 +1,7 @@
 use core::slice::Iter;
 use std::{collections::HashMap, iter::Peekable};
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 enum Token<'a> {
     At,
     Identifier(&'a str),
@@ -10,7 +10,7 @@ enum Token<'a> {
     LParan,
     RParan,
     Comma,
-    Colons,
+    Colon,
     LSquareBracket,
     RSquareBracket,
     Number(u32),
@@ -60,7 +60,7 @@ fn tokenize(shader_src: &str) -> Result<Vec<Token>, String> {
                     tokens.push(Token::RParan);
                 }
                 ',' => tokens.push(Token::Comma),
-                ':' => tokens.push(Token::Colons),
+                ':' => tokens.push(Token::Colon),
                 '[' => {
                     open_square_brackets += 1;
                     tokens.push(Token::LSquareBracket);
@@ -123,7 +123,7 @@ struct AST<'a> {
     types: HashMap<&'a str, u32>,
 }
 
-fn generate_ast(tokens: Vec<Token>) -> Result<AST, String> {
+fn parse(tokens: Vec<Token>) -> Result<AST, String> {
     let mut res = AST {
         backing_buffer: Vec::new(),
         types: HashMap::new(),
@@ -206,7 +206,7 @@ fn parse_field<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> R
     while let Some(&t) = iter.next() {
         match t {
             Token::Identifier(ident) => name = ident,
-            Token::LParan | Token::Comma | Token::RParan | Token::Colons => continue,
+            Token::LParan | Token::Comma | Token::RParan | Token::Colon => continue,
             Token::Number(u32) => (),
             _ => {
                 return Err(format!("Unexpected token {:?}, expected an identifier.", t));
@@ -221,4 +221,79 @@ fn parse_field<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> R
     });
 
     unimplemented!()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_STR: &str = "@Input {
+    waves: Tex2D[f32; 4],
+    displacement_output_input: RWTex2D[f32; 4],
+    displacement_input_output: RWTex2D[f32; 4],
+    derivatives_output_input: RWTex2D[f32; 4],
+    derivatives_input_output: RWTex2D[f32; 4],
+}";
+
+    #[test]
+    fn tokenizer() {
+        let tokens = vec![
+            Token::At,
+            Token::Identifier("Input"),
+            Token::LCurlyBracket,
+            Token::Identifier("waves"),
+            Token::Colon,
+            Token::Identifier("Tex2D"),
+            Token::LSquareBracket,
+            Token::Identifier("f32"),
+            Token::Semicolon,
+            Token::Number(4),
+            Token::RSquareBracket,
+            Token::Comma,
+            Token::Identifier("displacement_output_input"),
+            Token::Colon,
+            Token::Identifier("RWTex2D"),
+            Token::LSquareBracket,
+            Token::Identifier("f32"),
+            Token::Semicolon,
+            Token::Number(4),
+            Token::RSquareBracket,
+            Token::Comma,
+            Token::Identifier("displacement_input_output"),
+            Token::Colon,
+            Token::Identifier("RWTex2D"),
+            Token::LSquareBracket,
+            Token::Identifier("f32"),
+            Token::Semicolon,
+            Token::Number(4),
+            Token::RSquareBracket,
+            Token::Comma,
+            Token::Identifier("derivatives_output_input"),
+            Token::Colon,
+            Token::Identifier("RWTex2D"),
+            Token::LSquareBracket,
+            Token::Identifier("f32"),
+            Token::Semicolon,
+            Token::Number(4),
+            Token::RSquareBracket,
+            Token::Comma,
+            Token::Identifier("derivatives_input_output"),
+            Token::Colon,
+            Token::Identifier("RWTex2D"),
+            Token::LSquareBracket,
+            Token::Identifier("f32"),
+            Token::Semicolon,
+            Token::Number(4),
+            Token::RSquareBracket,
+            Token::Comma,
+            Token::RCurlyBracket,
+        ];
+
+        let res = tokenize(TEST_STR).unwrap();
+        assert_eq!(res.len(), tokens.len());
+
+        for (i, token) in res.into_iter().enumerate() {
+            assert_eq!(token, tokens[i]);
+        }
+    }
 }
