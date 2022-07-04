@@ -116,7 +116,7 @@ enum ASTNode<'a> {
     Field {
         name: &'a str,
         type_idx: u32,
-        register: (i8, i8),
+        register: Option<(u8, u8)>,
     },
     Texture {
         read_write: bool,
@@ -182,8 +182,6 @@ fn parse_scope<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> R
 
 fn parse_field<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> Result<(), String> {
     let mut name: &str = "";
-    let mut binding_slot: i8 = -1;
-    let mut space: i8 = -1;
 
     if let Token::Identifier(ident) = consume_token(iter, Token::Identifier(""))? {
         name = ident;
@@ -193,25 +191,33 @@ fn parse_field<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> R
 
     let type_idx = parse_type(iter, ast)?;
 
+    let register: Option<(u8, u8)>;
     if let Some(Token::LParan) = iter.peek() {
+        let mut binding_slot = 0;
+        let mut space = 0;
+
         iter.next();
         if let Token::Number(num) = consume_token(iter, Token::Number(0))? {
-            binding_slot = num as i8;
+            binding_slot = num as u8;
         }
 
         consume_token(iter, Token::Comma)?;
 
         if let Token::Number(num) = consume_token(iter, Token::Number(0))? {
-            space = num as i8;
+            space = num as u8;
         }
 
         consume_token(iter, Token::RParan)?;
+
+        register = Some((binding_slot, space));
+    } else {
+        register = None;
     }
 
     ast.backing_buffer.push(ASTNode::Field {
         name,
         type_idx,
-        register: (binding_slot, space),
+        register,
     });
 
     consume_token(iter, Token::Comma)?;
