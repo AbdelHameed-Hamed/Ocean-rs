@@ -15,6 +15,7 @@ enum Token<'a> {
     RSquareBracket,
     Number(u32),
     Semicolon,
+    Mut,
 }
 
 fn tokenize(shader_src: &str) -> Result<Vec<Token>, String> {
@@ -34,7 +35,11 @@ fn tokenize(shader_src: &str) -> Result<Vec<Token>, String> {
                     while let Some(&(j, c)) = iter.peek() {
                         if c.is_alphanumeric() == false && c != '_' {
                             let identifier = unsafe { shader_src.get_unchecked(i..j) };
-                            tokens.push(Token::Identifier(identifier));
+                            if identifier == "mut" {
+                                tokens.push(Token::Mut);
+                            } else {
+                                tokens.push(Token::Identifier(identifier));
+                            }
                             break;
                         }
                         iter.next();
@@ -110,11 +115,17 @@ enum ASTNode<'a> {
     },
     Field {
         name: &'a str,
-        register: (u8, u8),
         type_idx: u32,
+        register: (i8, i8),
     },
-    F32xN {
+    Texture {
+        read_write: bool,
         dimension: u8,
+        underlying_type: (u32, u8),
+    },
+    Buffer {
+        read_write: bool,
+        underlying_type_idx: u32,
     },
 }
 
@@ -130,97 +141,186 @@ fn parse(tokens: Vec<Token>) -> Result<AST, String> {
     };
 
     let mut iter = tokens.iter().peekable();
-    while let Some(t) = iter.next() {
-        match t {
-            Token::At => {
-                let name = if let Some(t) = iter.next() {
-                    if let Token::Identifier(name) = t {
-                        name
-                    } else {
-                        ""
-                    }
-                } else {
-                    return Err("Incomplete @ scope".to_string());
-                };
 
-                let children_begin_idx = if let Some(&t) = iter.next() {
-                    if let Token::LCurlyBracket = t {
-                        res.backing_buffer.len() as u32
-                    } else {
-                        return Err(format!("Unexpected token {:?}, expected '{{' instead.", t));
-                    }
-                } else {
-                    return Err("Incomplete @ scope".to_string());
-                };
+    consume_token(&mut iter, Token::At)?;
 
-                let idx = res.backing_buffer.len();
-                res.backing_buffer.push(ASTNode::None);
-
-                let node = ASTNode::Scope {
-                    name,
-                    children_begin_idx,
-                    children_end_idx: parse_scope(&mut iter, &mut res)?,
-                };
-                res.backing_buffer[idx] = node;
-            }
-            Token::Comma => continue,
-            _ => {
-                return Err(format!(
-                    "Unexpected token {:?}, expected '@' or ',' instead.",
-                    t
-                ))
-            }
-        }
+    let mut name = "";
+    if let Token::Identifier(ident) = consume_token(&mut iter, Token::Identifier(""))? {
+        name = ident;
     }
+
+    consume_token(&mut iter, Token::LCurlyBracket)?;
+
+    let children_begin_idx = res.backing_buffer.len() as u32;
+
+    parse_scope(&mut iter, &mut res)?;
+
+    consume_token(&mut iter, Token::RCurlyBracket)?;
+
+    let children_end_idx = res.backing_buffer.len() as u32;
+
+    res.backing_buffer.push(ASTNode::Scope {
+        name,
+        children_begin_idx,
+        children_end_idx,
+    });
 
     return Ok(res);
 }
 
-fn parse_scope(iter: &mut Peekable<Iter<Token>>, ast: &mut AST) -> Result<u32, String> {
-    while let Some(&t) = iter.next() {
-        match t {
-            Token::Identifier(name) => {
-                if let Some(&t) = iter.next() {
-                    if let Token::LParan = t {
-                    } else {
-                        return Err(format!("Unexpected token {:?}, expected '(' instead.", t));
-                    }
-                } else {
-                    return Err("Incomplete field".to_string());
-                }
-            }
-            _ => {
-                return Err(format!("Unexpected token {:?}, expected an identifier.", t));
-            }
+fn parse_scope<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> Result<(), String> {
+    while let Some(&&token) = iter.peek() {
+        if token == Token::RCurlyBracket {
+            break;
         }
+
+        parse_field(iter, ast)?;
     }
 
-    return Ok(ast.backing_buffer.len() as u32);
+    return Ok(());
 }
 
-fn parse_field<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> Result<u32, String> {
-    let mut name = "";
-    let mut register = (0, 0);
-    let mut type_idx = 0;
+fn parse_field<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> Result<(), String> {
+    let mut name: &str = "";
+    let mut binding_slot: i8 = -1;
+    let mut space: i8 = -1;
 
-    while let Some(&t) = iter.next() {
-        match t {
-            Token::Identifier(ident) => name = ident,
-            Token::LParan | Token::Comma | Token::RParan | Token::Colon => continue,
-            Token::Number(u32) => (),
-            _ => {
-                return Err(format!("Unexpected token {:?}, expected an identifier.", t));
-            }
+    if let Token::Identifier(ident) = consume_token(iter, Token::Identifier(""))? {
+        name = ident;
+    }
+
+    consume_token(iter, Token::Colon)?;
+
+    let type_idx = parse_type(iter, ast)?;
+
+    if let Some(Token::LParan) = iter.peek() {
+        iter.next();
+        if let Token::Number(num) = consume_token(iter, Token::Number(0))? {
+            binding_slot = num as i8;
         }
+
+        consume_token(iter, Token::Comma)?;
+
+        if let Token::Number(num) = consume_token(iter, Token::Number(0))? {
+            space = num as i8;
+        }
+
+        consume_token(iter, Token::RParan)?;
     }
 
     ast.backing_buffer.push(ASTNode::Field {
         name,
-        register,
         type_idx,
+        register: (binding_slot, space),
     });
 
-    unimplemented!()
+    consume_token(iter, Token::Comma)?;
+
+    return Ok(());
+}
+
+fn parse_type<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> Result<u32, String> {
+    let mut mutable = false;
+    if let Some(Token::Mut) = iter.peek() {
+        mutable = true;
+        iter.next();
+    }
+
+    if let Some(Token::LSquareBracket) = iter.peek() {
+        iter.next();
+
+        let mut underlying_type_idx = 0;
+        if let Token::Identifier(ident) = consume_token(iter, Token::Identifier(""))? {
+            underlying_type_idx = ast.types[ident] as u32;
+        }
+
+        consume_token(iter, Token::RSquareBracket)?;
+
+        ast.backing_buffer.push(ASTNode::Buffer {
+            read_write: mutable,
+            underlying_type_idx,
+        });
+
+        return Ok(ast.backing_buffer.len() as u32);
+    } else if let Token::Identifier(ident) = consume_token(iter, Token::Identifier(""))? {
+        match ident {
+            "Tex1D" | "Tex2D" | "Tex3D" => {
+                let dimension = ident.chars().nth(3).unwrap().to_digit(10).unwrap() as u8;
+
+                consume_token(iter, Token::LSquareBracket)?;
+
+                let mut underlying_type_idx = 0;
+                if let Token::Identifier(type_name) = consume_token(iter, Token::Identifier(""))? {
+                    underlying_type_idx = ast.types[type_name];
+                }
+
+                consume_token(iter, Token::Semicolon)?;
+
+                let mut underlying_type_count = 0;
+                if let Token::Number(num) = consume_token(iter, Token::Number(0))? {
+                    underlying_type_count = num as u8;
+                }
+
+                consume_token(iter, Token::RSquareBracket)?;
+
+                ast.backing_buffer.push(ASTNode::Texture {
+                    read_write: mutable,
+                    dimension,
+                    underlying_type: (underlying_type_idx, underlying_type_count),
+                });
+
+                return Ok(ast.backing_buffer.len() as u32);
+            }
+            _ => {
+                if mutable {
+                    return Err(format!("'mut {:?}' makes no sense.", ident));
+                }
+
+                return Ok(ast.types[ident] as u32);
+            }
+        }
+    }
+
+    unreachable!();
+}
+
+fn consume_token<'a>(
+    iter: &mut Peekable<Iter<Token<'a>>>,
+    token: Token<'a>,
+) -> Result<Token<'a>, String> {
+    if let Some(&t) = iter.next() {
+        match t {
+            Token::At
+            | Token::LCurlyBracket
+            | Token::RCurlyBracket
+            | Token::LParan
+            | Token::RParan
+            | Token::Comma
+            | Token::Colon
+            | Token::LSquareBracket
+            | Token::RSquareBracket
+            | Token::Semicolon
+            | Token::Mut => {
+                if token == t {
+                    return Ok(t);
+                }
+            }
+            Token::Identifier(_) => {
+                if let Token::Identifier(_) = token {
+                    return Ok(t);
+                }
+            }
+            Token::Number(_) => {
+                if let Token::Number(_) = token {
+                    return Ok(t);
+                }
+            }
+        }
+
+        return Err(format!("Expected token {:?}, found {:?}.", token, t));
+    } else {
+        return Err(format!("Expected token {:?}, found EOF.", token));
+    }
 }
 
 #[cfg(test)]
