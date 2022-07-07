@@ -2,7 +2,7 @@ use core::slice::Iter;
 use std::{collections::HashMap, iter::Peekable};
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-enum Token<'a> {
+pub enum Token<'a> {
     At,
     Identifier(&'a str),
     LCurlyBracket,
@@ -18,7 +18,7 @@ enum Token<'a> {
     Mut,
 }
 
-fn tokenize(shader_src: &str) -> Result<Vec<Token>, String> {
+pub fn tokenize(shader_src: &str) -> Result<Vec<Token>, String> {
     if let Some(start_idx) = shader_src.find('@') {
         let start = unsafe { shader_src.get_unchecked(start_idx..) };
         let mut open_curly_brackets = 0;
@@ -106,41 +106,66 @@ fn tokenize(shader_src: &str) -> Result<Vec<Token>, String> {
     }
 }
 
+#[derive(Debug)]
+enum PrimitiveType {
+    None,
+    I8,
+    U8,
+    I16,
+    U16,
+    I32,
+    U32,
+    I64,
+    U64,
+    F32,
+    F64,
+}
+
+#[derive(Debug)]
+enum Type {
+    Primitive {
+        value: PrimitiveType,
+    },
+    Buffer {
+        read_write: bool,
+        underlying_type: PrimitiveType,
+    },
+    Texture {
+        read_write: bool,
+        underlying_type: PrimitiveType,
+        underlying_type_count: u8,
+        dimension: u8,
+    },
+}
+
+#[derive(Debug)]
 enum ASTNode<'a> {
     None,
     Scope {
         name: &'a str,
-        children_begin_idx: u32,
-        children_end_idx: u32,
+        children_begin_idx: usize,
+        children_end_idx: usize,
     },
     Field {
         name: &'a str,
-        type_idx: u32,
+        type_value: Type,
         register: Option<(u8, u8)>,
     },
-    Texture {
-        read_write: bool,
-        dimension: u8,
-        underlying_type: (u32, u8),
-    },
-    Buffer {
-        read_write: bool,
-        underlying_type_idx: u32,
-    },
 }
 
-struct AST<'a> {
+pub struct AST<'a> {
     backing_buffer: Vec<ASTNode<'a>>,
-    types: HashMap<&'a str, u32>,
 }
 
-fn parse(tokens: Vec<Token>) -> Result<AST, String> {
+pub fn parse(tokens: Vec<Token>) -> Result<AST, String> {
     let mut res = AST {
         backing_buffer: Vec::new(),
-        types: HashMap::new(),
     };
 
     let mut iter = tokens.iter().peekable();
+
+    let begin_idx = res.backing_buffer.len();
+    res.backing_buffer.push(ASTNode::None);
 
     consume_token(&mut iter, Token::At)?;
 
@@ -151,19 +176,17 @@ fn parse(tokens: Vec<Token>) -> Result<AST, String> {
 
     consume_token(&mut iter, Token::LCurlyBracket)?;
 
-    let children_begin_idx = res.backing_buffer.len() as u32;
-
     parse_scope(&mut iter, &mut res)?;
 
     consume_token(&mut iter, Token::RCurlyBracket)?;
 
-    let children_end_idx = res.backing_buffer.len() as u32;
+    let children_end_idx = res.backing_buffer.len();
 
-    res.backing_buffer.push(ASTNode::Scope {
+    res.backing_buffer[begin_idx] = ASTNode::Scope {
         name,
-        children_begin_idx,
+        children_begin_idx: begin_idx + 1,
         children_end_idx,
-    });
+    };
 
     return Ok(res);
 }
@@ -181,6 +204,9 @@ fn parse_scope<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> R
 }
 
 fn parse_field<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> Result<(), String> {
+    let insertion_idx = ast.backing_buffer.len();
+    ast.backing_buffer.push(ASTNode::None);
+
     let mut name: &str = "";
 
     if let Token::Identifier(ident) = consume_token(iter, Token::Identifier(""))? {
@@ -189,7 +215,7 @@ fn parse_field<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> R
 
     consume_token(iter, Token::Colon)?;
 
-    let type_idx = parse_type(iter, ast)?;
+    let type_value = parse_field_type(iter)?;
 
     let register: Option<(u8, u8)>;
     if let Some(Token::LParan) = iter.peek() {
@@ -214,18 +240,18 @@ fn parse_field<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> R
         register = None;
     }
 
-    ast.backing_buffer.push(ASTNode::Field {
-        name,
-        type_idx,
-        register,
-    });
-
     consume_token(iter, Token::Comma)?;
+
+    ast.backing_buffer[insertion_idx as usize] = ASTNode::Field {
+        name,
+        type_value,
+        register,
+    };
 
     return Ok(());
 }
 
-fn parse_type<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> Result<u32, String> {
+fn parse_field_type<'a>(iter: &mut Peekable<Iter<Token<'a>>>) -> Result<Type, String> {
     let mut mutable = false;
     if let Some(Token::Mut) = iter.peek() {
         mutable = true;
@@ -235,54 +261,55 @@ fn parse_type<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> Re
     if let Some(Token::LSquareBracket) = iter.peek() {
         iter.next();
 
-        let mut underlying_type_idx = 0;
-        if let Token::Identifier(ident) = consume_token(iter, Token::Identifier(""))? {
-            underlying_type_idx = ast.types[ident] as u32;
+        let mut underlying_type = PrimitiveType::None;
+        if let Token::Identifier(type_name) = consume_token(iter, Token::Identifier(""))? {
+            underlying_type = get_primitive_type(type_name)?;
         }
 
         consume_token(iter, Token::RSquareBracket)?;
 
-        ast.backing_buffer.push(ASTNode::Buffer {
+        return Ok(Type::Buffer {
             read_write: mutable,
-            underlying_type_idx,
+            underlying_type,
         });
-
-        return Ok(ast.backing_buffer.len() as u32);
-    } else if let Token::Identifier(ident) = consume_token(iter, Token::Identifier(""))? {
-        match ident {
+    } else if let Token::Identifier(type_name) = consume_token(iter, Token::Identifier(""))? {
+        match type_name {
             "Tex1D" | "Tex2D" | "Tex3D" => {
-                let dimension = ident.chars().nth(3).unwrap().to_digit(10).unwrap() as u8;
+                let dimension = type_name.chars().nth(3).unwrap().to_digit(10).unwrap() as u8;
+                assert!(dimension >= 1 && dimension <= 3);
 
                 consume_token(iter, Token::LSquareBracket)?;
 
-                let mut underlying_type_idx = 0;
+                let mut underlying_type = PrimitiveType::None;
                 if let Token::Identifier(type_name) = consume_token(iter, Token::Identifier(""))? {
-                    underlying_type_idx = ast.types[type_name];
+                    underlying_type = get_primitive_type(type_name)?;
                 }
 
                 consume_token(iter, Token::Semicolon)?;
 
                 let mut underlying_type_count = 0;
                 if let Token::Number(num) = consume_token(iter, Token::Number(0))? {
+                    assert!(num >= 1 && num <= 4);
                     underlying_type_count = num as u8;
                 }
 
                 consume_token(iter, Token::RSquareBracket)?;
 
-                ast.backing_buffer.push(ASTNode::Texture {
+                return Ok(Type::Texture {
                     read_write: mutable,
+                    underlying_type,
+                    underlying_type_count,
                     dimension,
-                    underlying_type: (underlying_type_idx, underlying_type_count),
                 });
-
-                return Ok(ast.backing_buffer.len() as u32);
             }
             _ => {
                 if mutable {
-                    return Err(format!("'mut {:?}' makes no sense.", ident));
+                    return Err(format!("'mut {:?}' makes no sense.", type_name));
                 }
 
-                return Ok(ast.types[ident] as u32);
+                return Ok(Type::Primitive {
+                    value: get_primitive_type(type_name)?,
+                });
             }
         }
     }
@@ -326,6 +353,22 @@ fn consume_token<'a>(
         return Err(format!("Expected token {:?}, found {:?}.", token, t));
     } else {
         return Err(format!("Expected token {:?}, found EOF.", token));
+    }
+}
+
+fn get_primitive_type(type_name: &str) -> Result<PrimitiveType, String> {
+    match type_name {
+        "i8" => return Ok(PrimitiveType::I8),
+        "u8" => return Ok(PrimitiveType::U8),
+        "i16" => return Ok(PrimitiveType::I16),
+        "u16" => return Ok(PrimitiveType::U16),
+        "i32" => return Ok(PrimitiveType::I32),
+        "u32" => return Ok(PrimitiveType::U32),
+        "i64" => return Ok(PrimitiveType::I64),
+        "u64" => return Ok(PrimitiveType::U64),
+        "f32" => return Ok(PrimitiveType::F32),
+        "f64" => return Ok(PrimitiveType::F64),
+        _ => return Err(format!("Unknown primitive type {}", type_name)),
     }
 }
 
