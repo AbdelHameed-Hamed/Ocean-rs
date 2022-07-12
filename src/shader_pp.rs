@@ -372,6 +372,31 @@ fn get_primitive_type(type_name: &str) -> Result<PrimitiveType, String> {
     }
 }
 
+pub fn print_ast(ast: &AST) {
+    print_ast_internal(ast, 0, 0);
+}
+
+fn print_ast_internal(ast: &AST, idx: usize, depth: usize) {
+    print!("{:\t<1$}", "", depth);
+
+    let node = &ast.backing_buffer[idx];
+    match node {
+        &ASTNode::Scope {
+            children_begin_idx,
+            children_end_idx,
+            ..
+        } => {
+            println!("{:?}", node);
+
+            for i in children_begin_idx..children_end_idx {
+                print_ast_internal(ast, i, depth + 1);
+            }
+        }
+        &ASTNode::Field { .. } => println!("{:?}", node),
+        _ => unreachable!(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
