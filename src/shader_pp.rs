@@ -189,11 +189,7 @@ pub fn parse(tokens: Vec<Token>) -> Result<AST, String> {
         name = ident;
     }
 
-    consume_token(&mut iter, Token::LCurlyBracket)?;
-
     parse_structure(&mut iter, &mut res)?;
-
-    consume_token(&mut iter, Token::RCurlyBracket)?;
 
     let children_end_idx = res.backing_buffer.len();
 
@@ -210,6 +206,8 @@ fn parse_structure<'a>(
     iter: &mut Peekable<Iter<Token<'a>>>,
     ast: &mut AST<'a>,
 ) -> Result<(), String> {
+    consume_token(iter, Token::LCurlyBracket)?;
+
     while let Some(&&token) = iter.peek() {
         if token == Token::RCurlyBracket {
             break;
@@ -217,6 +215,8 @@ fn parse_structure<'a>(
 
         parse_field(iter, ast)?;
     }
+
+    consume_token(iter, Token::RCurlyBracket)?;
 
     return Ok(());
 }
@@ -302,6 +302,27 @@ fn parse_field_type<'a>(
             read_write: mutable,
             underlying_type,
         });
+    } else if let Some(Token::Struct) = iter.peek() {
+        iter.next();
+
+        let name = if let Some(Token::Identifier(type_name)) = iter.peek() {
+            assert!(ast.types_map.get(type_name) == None);
+            Some(*type_name)
+        } else {
+            None
+        };
+
+        let children_begin_idx = ast.backing_buffer.len();
+
+        parse_structure(iter, ast)?;
+
+        let children_end_idx = ast.backing_buffer.len();
+
+        return Ok(FieldType::Structure(Structure {
+            name,
+            children_begin_idx,
+            children_end_idx,
+        }));
     } else if let Token::Identifier(type_name) = consume_token(iter, Token::Identifier(""))? {
         match type_name {
             "Tex1D" | "Tex2D" | "Tex3D" => {
@@ -422,7 +443,13 @@ fn print_ast_internal(ast: &AST, idx: usize, depth: usize) {
         &ASTNode::Structure(structure) => {
             print_structure(ast, structure, depth);
         }
-        &ASTNode::Field { .. } => println!("{:?}", node),
+        &ASTNode::Field { field_type, .. } => {
+            println!("{:?}", node);
+
+            if let FieldType::Structure(structure) = field_type {
+                print_structure(ast, structure, depth + 1);
+            }
+        }
         _ => unreachable!(),
     }
 }
@@ -430,8 +457,9 @@ fn print_ast_internal(ast: &AST, idx: usize, depth: usize) {
 fn print_structure(ast: &AST, structure: Structure, depth: usize) {
     print!("{:\t<1$}", "", depth);
     if let Some(name) = structure.name {
-        print!("{}\n", name);
+        print!("{}", name);
     }
+    println!();
 
     for i in structure.children_begin_idx..structure.children_end_idx {
         print_ast_internal(ast, i, depth + 1);
