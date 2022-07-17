@@ -16,6 +16,7 @@ pub enum Token<'a> {
     Number(u32),
     Semicolon,
     Mut,
+    Struct,
 }
 
 pub fn tokenize(shader_src: &str) -> Result<Vec<Token>, String> {
@@ -37,6 +38,8 @@ pub fn tokenize(shader_src: &str) -> Result<Vec<Token>, String> {
                             let identifier = unsafe { shader_src.get_unchecked(i..j) };
                             if identifier == "mut" {
                                 tokens.push(Token::Mut);
+                            } else if identifier == "struct" {
+                                tokens.push(Token::Struct);
                             } else {
                                 tokens.push(Token::Identifier(identifier));
                             }
@@ -106,7 +109,7 @@ pub fn tokenize(shader_src: &str) -> Result<Vec<Token>, String> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum PrimitiveType {
     None,
     I8,
@@ -121,14 +124,28 @@ enum PrimitiveType {
     F64,
 }
 
-#[derive(Debug)]
-enum Type {
-    Primitive {
-        value: PrimitiveType,
-    },
+#[derive(Debug, Clone, Copy)]
+struct Structure<'a> {
+    name: Option<&'a str>,
+    children_begin_idx: usize,
+    children_end_idx: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BufferType<'a> {
+    None,
+    PrimitiveType(PrimitiveType),
+    Structure(Structure<'a>),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FieldType<'a> {
+    None,
+    PrimitiveType(PrimitiveType),
+    Structure(Structure<'a>),
     Buffer {
         read_write: bool,
-        underlying_type: PrimitiveType,
+        underlying_type: BufferType<'a>,
     },
     Texture {
         read_write: bool,
@@ -138,28 +155,26 @@ enum Type {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum ASTNode<'a> {
     None,
-    Scope {
-        name: &'a str,
-        children_begin_idx: usize,
-        children_end_idx: usize,
-    },
+    Structure(Structure<'a>),
     Field {
         name: &'a str,
-        type_value: Type,
+        field_type: FieldType<'a>,
         register: Option<(u8, u8)>,
     },
 }
 
 pub struct AST<'a> {
     backing_buffer: Vec<ASTNode<'a>>,
+    types_map: HashMap<&'a str, (usize, usize)>,
 }
 
 pub fn parse(tokens: Vec<Token>) -> Result<AST, String> {
     let mut res = AST {
         backing_buffer: Vec::new(),
+        types_map: HashMap::new(),
     };
 
     let mut iter = tokens.iter().peekable();
@@ -176,22 +191,25 @@ pub fn parse(tokens: Vec<Token>) -> Result<AST, String> {
 
     consume_token(&mut iter, Token::LCurlyBracket)?;
 
-    parse_scope(&mut iter, &mut res)?;
+    parse_structure(&mut iter, &mut res)?;
 
     consume_token(&mut iter, Token::RCurlyBracket)?;
 
     let children_end_idx = res.backing_buffer.len();
 
-    res.backing_buffer[begin_idx] = ASTNode::Scope {
-        name,
+    res.backing_buffer[begin_idx] = ASTNode::Structure(Structure {
+        name: Some(name),
         children_begin_idx: begin_idx + 1,
         children_end_idx,
-    };
+    });
 
     return Ok(res);
 }
 
-fn parse_scope<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> Result<(), String> {
+fn parse_structure<'a>(
+    iter: &mut Peekable<Iter<Token<'a>>>,
+    ast: &mut AST<'a>,
+) -> Result<(), String> {
     while let Some(&&token) = iter.peek() {
         if token == Token::RCurlyBracket {
             break;
@@ -215,7 +233,7 @@ fn parse_field<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> R
 
     consume_token(iter, Token::Colon)?;
 
-    let type_value = parse_field_type(iter)?;
+    let field_type = parse_field_type(iter, ast)?;
 
     let register: Option<(u8, u8)>;
     if let Some(Token::LParan) = iter.peek() {
@@ -244,14 +262,17 @@ fn parse_field<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> R
 
     ast.backing_buffer[insertion_idx as usize] = ASTNode::Field {
         name,
-        type_value,
+        field_type,
         register,
     };
 
     return Ok(());
 }
 
-fn parse_field_type<'a>(iter: &mut Peekable<Iter<Token<'a>>>) -> Result<Type, String> {
+fn parse_field_type<'a>(
+    iter: &mut Peekable<Iter<Token<'a>>>,
+    ast: &mut AST<'a>,
+) -> Result<FieldType<'a>, String> {
     let mut mutable = false;
     if let Some(Token::Mut) = iter.peek() {
         mutable = true;
@@ -261,14 +282,23 @@ fn parse_field_type<'a>(iter: &mut Peekable<Iter<Token<'a>>>) -> Result<Type, St
     if let Some(Token::LSquareBracket) = iter.peek() {
         iter.next();
 
-        let mut underlying_type = PrimitiveType::None;
+        let mut underlying_type = BufferType::None;
         if let Token::Identifier(type_name) = consume_token(iter, Token::Identifier(""))? {
-            underlying_type = get_primitive_type(type_name)?;
+            underlying_type = if let Ok(primitive_type) = get_primitive_type(type_name) {
+                BufferType::PrimitiveType(primitive_type)
+            } else {
+                let (children_begin_idx, children_end_idx) = ast.types_map[type_name];
+                BufferType::Structure(Structure {
+                    name: Some(type_name),
+                    children_begin_idx,
+                    children_end_idx,
+                })
+            };
         }
 
         consume_token(iter, Token::RSquareBracket)?;
 
-        return Ok(Type::Buffer {
+        return Ok(FieldType::Buffer {
             read_write: mutable,
             underlying_type,
         });
@@ -295,7 +325,7 @@ fn parse_field_type<'a>(iter: &mut Peekable<Iter<Token<'a>>>) -> Result<Type, St
 
                 consume_token(iter, Token::RSquareBracket)?;
 
-                return Ok(Type::Texture {
+                return Ok(FieldType::Texture {
                     read_write: mutable,
                     underlying_type,
                     underlying_type_count,
@@ -307,9 +337,16 @@ fn parse_field_type<'a>(iter: &mut Peekable<Iter<Token<'a>>>) -> Result<Type, St
                     return Err(format!("'mut {:?}' makes no sense.", type_name));
                 }
 
-                return Ok(Type::Primitive {
-                    value: get_primitive_type(type_name)?,
-                });
+                if let Ok(primitive_type) = get_primitive_type(type_name) {
+                    return Ok(FieldType::PrimitiveType(primitive_type));
+                } else {
+                    let (children_begin_idx, children_end_idx) = ast.types_map[type_name];
+                    return Ok(FieldType::Structure(Structure {
+                        name: Some(type_name),
+                        children_begin_idx,
+                        children_end_idx,
+                    }));
+                }
             }
         }
     }
@@ -333,7 +370,8 @@ fn consume_token<'a>(
             | Token::LSquareBracket
             | Token::RSquareBracket
             | Token::Semicolon
-            | Token::Mut => {
+            | Token::Mut
+            | Token::Struct => {
                 if token == t {
                     return Ok(t);
                 }
@@ -381,19 +419,22 @@ fn print_ast_internal(ast: &AST, idx: usize, depth: usize) {
 
     let node = &ast.backing_buffer[idx];
     match node {
-        &ASTNode::Scope {
-            children_begin_idx,
-            children_end_idx,
-            ..
-        } => {
-            println!("{:?}", node);
-
-            for i in children_begin_idx..children_end_idx {
-                print_ast_internal(ast, i, depth + 1);
-            }
+        &ASTNode::Structure(structure) => {
+            print_structure(ast, structure, depth);
         }
         &ASTNode::Field { .. } => println!("{:?}", node),
         _ => unreachable!(),
+    }
+}
+
+fn print_structure(ast: &AST, structure: Structure, depth: usize) {
+    print!("{:\t<1$}", "", depth);
+    if let Some(name) = structure.name {
+        print!("{}\n", name);
+    }
+
+    for i in structure.children_begin_idx..structure.children_end_idx {
+        print_ast_internal(ast, i, depth + 1);
     }
 }
 
