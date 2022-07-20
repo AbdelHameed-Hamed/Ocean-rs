@@ -329,6 +329,7 @@ fn parse_field_type<'a>(
         });
     } else if let Some(Token::Struct) = iter.peek() {
         iter.next();
+        assert!(iter.peek() == Some(&&Token::LCurlyBracket));
 
         let structure = parse_structure(iter, ast)?;
 
@@ -465,14 +466,20 @@ fn print_ast_internal(ast: &AST, idx: usize, depth: usize) {
 }
 
 fn print_structure(ast: &AST, structure: Structure, depth: usize) {
-    print!("{:\t<1$}", "", depth);
     if let Some(name) = structure.name {
-        print!("{}", name);
+        println!("{}", name);
     }
-    println!();
 
     for i in structure.children_begin_idx..structure.children_end_idx {
-        print_ast_internal(ast, i, depth + 1);
+        print_ast_internal(
+            ast,
+            i,
+            if structure.name == None {
+                depth
+            } else {
+                depth + 1
+            },
+        );
     }
 }
 
