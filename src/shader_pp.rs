@@ -179,25 +179,10 @@ pub fn parse(tokens: Vec<Token>) -> Result<AST, String> {
 
     let mut iter = tokens.iter().peekable();
 
-    let begin_idx = res.backing_buffer.len();
-    res.backing_buffer.push(ASTNode::None);
-
     consume_token(&mut iter, Token::At)?;
 
-    let mut name = "";
-    if let Token::Identifier(ident) = consume_token(&mut iter, Token::Identifier(""))? {
-        name = ident;
-    }
-
-    parse_structure(&mut iter, &mut res)?;
-
-    let children_end_idx = res.backing_buffer.len();
-
-    res.backing_buffer[begin_idx] = ASTNode::Structure(Structure {
-        name: Some(name),
-        children_begin_idx: begin_idx + 1,
-        children_end_idx,
-    });
+    let structure = parse_structure(&mut iter, &mut res)?;
+    assert!(structure.name != None);
 
     return Ok(res);
 }
@@ -205,26 +190,68 @@ pub fn parse(tokens: Vec<Token>) -> Result<AST, String> {
 fn parse_structure<'a>(
     iter: &mut Peekable<Iter<Token<'a>>>,
     ast: &mut AST<'a>,
-) -> Result<(), String> {
+) -> Result<Structure<'a>, String> {
+    let insertion_idx = ast.backing_buffer.len();
+    ast.backing_buffer.push(ASTNode::None);
+
+    let name = if let Some(&&Token::Identifier(ident)) = iter.peek() {
+        iter.next();
+        Some(ident)
+    } else {
+        None
+    };
+
+    let mut temp_iter = iter.clone();
+
+    let mut curly_brackets_num = 0;
+    let children_begin_idx = ast.backing_buffer.len();
+
+    while let Some(&token) = temp_iter.next() {
+        match token {
+            Token::LCurlyBracket => curly_brackets_num += 1,
+            Token::RCurlyBracket => {
+                curly_brackets_num -= 1;
+                if curly_brackets_num == 0 {
+                    break;
+                }
+            }
+            Token::Comma => {
+                if curly_brackets_num == 1 {
+                    ast.backing_buffer.push(ASTNode::None);
+                }
+            }
+            _ => continue,
+        }
+    }
+
+    let children_end_idx = ast.backing_buffer.len();
+
     consume_token(iter, Token::LCurlyBracket)?;
 
-    while let Some(&&token) = iter.peek() {
-        if token == Token::RCurlyBracket {
-            break;
-        }
-
-        parse_field(iter, ast)?;
+    let mut i = children_begin_idx;
+    while iter.peek() != Some(&&Token::RCurlyBracket) {
+        assert!(children_begin_idx <= i && i < children_end_idx);
+        ast.backing_buffer[i] = parse_field(iter, ast)?;
+        i += 1;
     }
 
     consume_token(iter, Token::RCurlyBracket)?;
 
-    return Ok(());
+    let res = Structure {
+        name,
+        children_begin_idx,
+        children_end_idx,
+    };
+
+    ast.backing_buffer[insertion_idx] = ASTNode::Structure(res);
+
+    return Ok(res);
 }
 
-fn parse_field<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> Result<(), String> {
-    let insertion_idx = ast.backing_buffer.len();
-    ast.backing_buffer.push(ASTNode::None);
-
+fn parse_field<'a>(
+    iter: &mut Peekable<Iter<Token<'a>>>,
+    ast: &mut AST<'a>,
+) -> Result<ASTNode<'a>, String> {
     let mut name: &str = "";
 
     if let Token::Identifier(ident) = consume_token(iter, Token::Identifier(""))? {
@@ -260,13 +287,11 @@ fn parse_field<'a>(iter: &mut Peekable<Iter<Token<'a>>>, ast: &mut AST<'a>) -> R
 
     consume_token(iter, Token::Comma)?;
 
-    ast.backing_buffer[insertion_idx as usize] = ASTNode::Field {
+    return Ok(ASTNode::Field {
         name,
         field_type,
         register,
-    };
-
-    return Ok(());
+    });
 }
 
 fn parse_field_type<'a>(
@@ -305,24 +330,9 @@ fn parse_field_type<'a>(
     } else if let Some(Token::Struct) = iter.peek() {
         iter.next();
 
-        let name = if let Some(Token::Identifier(type_name)) = iter.peek() {
-            assert!(ast.types_map.get(type_name) == None);
-            Some(*type_name)
-        } else {
-            None
-        };
+        let structure = parse_structure(iter, ast)?;
 
-        let children_begin_idx = ast.backing_buffer.len();
-
-        parse_structure(iter, ast)?;
-
-        let children_end_idx = ast.backing_buffer.len();
-
-        return Ok(FieldType::Structure(Structure {
-            name,
-            children_begin_idx,
-            children_end_idx,
-        }));
+        return Ok(FieldType::Structure(structure));
     } else if let Token::Identifier(type_name) = consume_token(iter, Token::Identifier(""))? {
         match type_name {
             "Tex1D" | "Tex2D" | "Tex3D" => {
