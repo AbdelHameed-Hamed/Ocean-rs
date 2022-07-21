@@ -449,6 +449,11 @@ mod tests {
     displacement_input_output: mut Tex2D[f32; 4],
     derivatives_output_input: mut Tex2D[f32; 4],
     derivatives_input_output: mut Tex2D[f32; 4],
+    test_type: struct {
+        x: f32,
+        y: f32,
+        z: f32,
+    },
 }";
 
     #[test]
@@ -505,6 +510,24 @@ mod tests {
             Token::Semicolon,
             Token::Number(4),
             Token::RSquareBracket,
+            Token::Comma,
+            Token::Identifier("test_type"),
+            Token::Colon,
+            Token::Struct,
+            Token::LCurlyBracket,
+            Token::Identifier("x"),
+            Token::Colon,
+            Token::Identifier("f32"),
+            Token::Comma,
+            Token::Identifier("y"),
+            Token::Colon,
+            Token::Identifier("f32"),
+            Token::Comma,
+            Token::Identifier("z"),
+            Token::Colon,
+            Token::Identifier("f32"),
+            Token::Comma,
+            Token::RCurlyBracket,
             Token::Comma,
             Token::RCurlyBracket,
         ];
