@@ -124,28 +124,21 @@ enum PrimitiveType {
     F64,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Structure<'a> {
-    name: Option<&'a str>,
-    children_begin_idx: usize,
-    children_end_idx: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum BufferType<'a> {
+#[derive(Debug, Clone)]
+enum BufferType {
     None,
     PrimitiveType(PrimitiveType),
-    Structure(Structure<'a>),
+    StructureIdx(usize),
 }
 
-#[derive(Debug, Clone, Copy)]
-enum FieldType<'a> {
+#[derive(Debug, Clone)]
+enum FieldType {
     None,
     PrimitiveType(PrimitiveType),
-    Structure(Structure<'a>),
+    StructureIdx(usize),
     Buffer {
         read_write: bool,
-        underlying_type: BufferType<'a>,
+        underlying_type: BufferType,
     },
     Texture {
         read_write: bool,
@@ -155,26 +148,31 @@ enum FieldType<'a> {
     },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum ASTNode<'a> {
     None,
-    Structure(Structure<'a>),
+    Structure {
+        name: Option<&'a str>,
+        children_indices: Vec<usize>,
+    },
     Field {
         name: &'a str,
-        field_type: FieldType<'a>,
+        field_type: FieldType,
         register: Option<(u8, u8)>,
     },
 }
 
 pub struct AST<'a> {
     backing_buffer: Vec<ASTNode<'a>>,
-    types_map: HashMap<&'a str, (usize, usize)>,
+    types_map: HashMap<&'a str, usize>,
+    root_node_idx: Option<usize>,
 }
 
 pub fn parse(tokens: Vec<Token>) -> Result<AST, String> {
     let mut res = AST {
         backing_buffer: Vec::new(),
         types_map: HashMap::new(),
+        root_node_idx: None,
     };
 
     let mut iter = tokens.iter().peekable();
@@ -182,7 +180,16 @@ pub fn parse(tokens: Vec<Token>) -> Result<AST, String> {
     consume_token(&mut iter, Token::At)?;
 
     let structure = parse_structure(&mut iter, &mut res)?;
-    assert!(structure.name != None);
+    if let ASTNode::Structure { name, .. } = structure {
+        if name == None {
+            return Err("Unnamed parent scopes are not allowed.".to_string());
+        }
+    } else {
+        return Err("Incorrect parsing of the main scope.".to_string());
+    }
+
+    res.backing_buffer.push(structure);
+    res.root_node_idx = Some(res.backing_buffer.len() - 1);
 
     return Ok(res);
 }
@@ -190,10 +197,7 @@ pub fn parse(tokens: Vec<Token>) -> Result<AST, String> {
 fn parse_structure<'a>(
     iter: &mut Peekable<Iter<Token<'a>>>,
     ast: &mut AST<'a>,
-) -> Result<Structure<'a>, String> {
-    let insertion_idx = ast.backing_buffer.len();
-    ast.backing_buffer.push(ASTNode::None);
-
+) -> Result<ASTNode<'a>, String> {
     let name = if let Some(&&Token::Identifier(ident)) = iter.peek() {
         iter.next();
         Some(ident)
@@ -201,51 +205,21 @@ fn parse_structure<'a>(
         None
     };
 
-    let mut temp_iter = iter.clone();
-
-    let mut curly_brackets_num = 0;
-    let children_begin_idx = ast.backing_buffer.len();
-
-    while let Some(&token) = temp_iter.next() {
-        match token {
-            Token::LCurlyBracket => curly_brackets_num += 1,
-            Token::RCurlyBracket => {
-                curly_brackets_num -= 1;
-                if curly_brackets_num == 0 {
-                    break;
-                }
-            }
-            Token::Comma => {
-                if curly_brackets_num == 1 {
-                    ast.backing_buffer.push(ASTNode::None);
-                }
-            }
-            _ => continue,
-        }
-    }
-
-    let children_end_idx = ast.backing_buffer.len();
-
     consume_token(iter, Token::LCurlyBracket)?;
 
-    let mut i = children_begin_idx;
+    let mut children_indices = vec![];
     while iter.peek() != Some(&&Token::RCurlyBracket) {
-        assert!(children_begin_idx <= i && i < children_end_idx);
-        ast.backing_buffer[i] = parse_field(iter, ast)?;
-        i += 1;
+        let field = parse_field(iter, ast)?;
+        children_indices.push(ast.backing_buffer.len());
+        ast.backing_buffer.push(field);
     }
 
     consume_token(iter, Token::RCurlyBracket)?;
 
-    let res = Structure {
+    return Ok(ASTNode::Structure {
         name,
-        children_begin_idx,
-        children_end_idx,
-    };
-
-    ast.backing_buffer[insertion_idx] = ASTNode::Structure(res);
-
-    return Ok(res);
+        children_indices,
+    });
 }
 
 fn parse_field<'a>(
@@ -297,7 +271,7 @@ fn parse_field<'a>(
 fn parse_field_type<'a>(
     iter: &mut Peekable<Iter<Token<'a>>>,
     ast: &mut AST<'a>,
-) -> Result<FieldType<'a>, String> {
+) -> Result<FieldType, String> {
     let mut mutable = false;
     if let Some(Token::Mut) = iter.peek() {
         mutable = true;
@@ -312,12 +286,7 @@ fn parse_field_type<'a>(
             underlying_type = if let Ok(primitive_type) = get_primitive_type(type_name) {
                 BufferType::PrimitiveType(primitive_type)
             } else {
-                let (children_begin_idx, children_end_idx) = ast.types_map[type_name];
-                BufferType::Structure(Structure {
-                    name: Some(type_name),
-                    children_begin_idx,
-                    children_end_idx,
-                })
+                return Ok(FieldType::StructureIdx(ast.types_map[type_name]));
             };
         }
 
@@ -331,9 +300,10 @@ fn parse_field_type<'a>(
         iter.next();
         assert!(iter.peek() == Some(&&Token::LCurlyBracket));
 
-        let structure = parse_structure(iter, ast)?;
+        let struct_node = parse_structure(iter, ast)?;
+        ast.backing_buffer.push(struct_node);
 
-        return Ok(FieldType::Structure(structure));
+        return Ok(FieldType::StructureIdx(ast.backing_buffer.len() - 1));
     } else if let Token::Identifier(type_name) = consume_token(iter, Token::Identifier(""))? {
         match type_name {
             "Tex1D" | "Tex2D" | "Tex3D" => {
@@ -372,12 +342,7 @@ fn parse_field_type<'a>(
                 if let Ok(primitive_type) = get_primitive_type(type_name) {
                     return Ok(FieldType::PrimitiveType(primitive_type));
                 } else {
-                    let (children_begin_idx, children_end_idx) = ast.types_map[type_name];
-                    return Ok(FieldType::Structure(Structure {
-                        name: Some(type_name),
-                        children_begin_idx,
-                        children_end_idx,
-                    }));
+                    return Ok(FieldType::StructureIdx(ast.types_map[type_name]));
                 }
             }
         }
@@ -443,7 +408,7 @@ fn get_primitive_type(type_name: &str) -> Result<PrimitiveType, String> {
 }
 
 pub fn print_ast(ast: &AST) {
-    print_ast_internal(ast, 0, 0);
+    print_ast_internal(ast, ast.root_node_idx.unwrap(), 0);
 }
 
 fn print_ast_internal(ast: &AST, idx: usize, depth: usize) {
@@ -451,35 +416,26 @@ fn print_ast_internal(ast: &AST, idx: usize, depth: usize) {
 
     let node = &ast.backing_buffer[idx];
     match node {
-        &ASTNode::Structure(structure) => {
-            print_structure(ast, structure, depth);
+        ASTNode::Structure {
+            name,
+            children_indices,
+        } => {
+            if let &Some(name) = name {
+                println!("{}", name);
+            }
+
+            for &i in children_indices {
+                print_ast_internal(ast, i, if *name == None { depth } else { depth + 1 });
+            }
         }
-        &ASTNode::Field { field_type, .. } => {
+        ASTNode::Field { field_type, .. } => {
             println!("{:?}", node);
 
-            if let FieldType::Structure(structure) = field_type {
-                print_structure(ast, structure, depth + 1);
+            if let &FieldType::StructureIdx(struct_idx) = field_type {
+                print_ast_internal(ast, struct_idx, depth + 1);
             }
         }
         _ => unreachable!(),
-    }
-}
-
-fn print_structure(ast: &AST, structure: Structure, depth: usize) {
-    if let Some(name) = structure.name {
-        println!("{}", name);
-    }
-
-    for i in structure.children_begin_idx..structure.children_end_idx {
-        print_ast_internal(
-            ast,
-            i,
-            if structure.name == None {
-                depth
-            } else {
-                depth + 1
-            },
-        );
     }
 }
 
