@@ -109,7 +109,7 @@ pub fn tokenize(shader_src: &str) -> Result<Vec<Token>, String> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum PrimitiveType {
     None,
     I8,
@@ -124,14 +124,14 @@ enum PrimitiveType {
     F64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum BufferType {
     None,
     PrimitiveType(PrimitiveType),
     StructureIdx(usize),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum FieldType {
     None,
     PrimitiveType(PrimitiveType),
@@ -148,7 +148,7 @@ enum FieldType {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum ASTNode<'a> {
     None,
     Structure {
@@ -537,6 +537,165 @@ mod tests {
 
         for (i, token) in res.into_iter().enumerate() {
             assert_eq!(token, tokens[i]);
+        }
+    }
+
+    #[test]
+    fn parser() {
+        let ast = parse(tokenize(TEST_STR).unwrap()).unwrap();
+
+        let expected_res = AST {
+            backing_buffer: vec![
+                ASTNode::Structure {
+                    name: Some("Input"),
+                    children_indices: (1..7).collect(),
+                },
+                ASTNode::Field {
+                    name: "waves",
+                    field_type: FieldType::Texture {
+                        read_write: false,
+                        underlying_type: PrimitiveType::F32,
+                        underlying_type_count: 4,
+                        dimension: 2,
+                    },
+                    register: None,
+                },
+                ASTNode::Field {
+                    name: "displacement_output_input",
+                    field_type: FieldType::Texture {
+                        read_write: true,
+                        underlying_type: PrimitiveType::F32,
+                        underlying_type_count: 4,
+                        dimension: 2,
+                    },
+                    register: None,
+                },
+                ASTNode::Field {
+                    name: "displacement_input_output",
+                    field_type: FieldType::Texture {
+                        read_write: true,
+                        underlying_type: PrimitiveType::F32,
+                        underlying_type_count: 4,
+                        dimension: 2,
+                    },
+                    register: None,
+                },
+                ASTNode::Field {
+                    name: "derivatives_output_input",
+                    field_type: FieldType::Texture {
+                        read_write: true,
+                        underlying_type: PrimitiveType::F32,
+                        underlying_type_count: 4,
+                        dimension: 2,
+                    },
+                    register: None,
+                },
+                ASTNode::Field {
+                    name: "derivatives_input_output",
+                    field_type: FieldType::Texture {
+                        read_write: true,
+                        underlying_type: PrimitiveType::F32,
+                        underlying_type_count: 4,
+                        dimension: 2,
+                    },
+                    register: None,
+                },
+                ASTNode::Field {
+                    name: "test_type",
+                    field_type: FieldType::StructureIdx(7),
+                    register: None,
+                },
+                ASTNode::Structure {
+                    name: None,
+                    children_indices: (8..11).collect(),
+                },
+                ASTNode::Field {
+                    name: "x",
+                    field_type: FieldType::PrimitiveType(PrimitiveType::F32),
+                    register: None,
+                },
+                ASTNode::Field {
+                    name: "y",
+                    field_type: FieldType::PrimitiveType(PrimitiveType::F32),
+                    register: None,
+                },
+                ASTNode::Field {
+                    name: "z",
+                    field_type: FieldType::PrimitiveType(PrimitiveType::F32),
+                    register: None,
+                },
+            ],
+            types_map: HashMap::new(),
+            root_node_idx: Some(0),
+        };
+
+        assert!(check_ast_equivalence(
+            &ast,
+            &expected_res,
+            ast.root_node_idx.unwrap(),
+            expected_res.root_node_idx.unwrap()
+        ));
+    }
+
+    fn check_ast_equivalence(lhs: &AST, rhs: &AST, lhs_idx: usize, rhs_idx: usize) -> bool {
+        let (lhs_node, rhs_node) = (&lhs.backing_buffer[lhs_idx], &rhs.backing_buffer[rhs_idx]);
+
+        match lhs_node {
+            ASTNode::Structure {
+                name: lhs_name,
+                children_indices: lhs_children_indices,
+            } => {
+                if let ASTNode::Structure {
+                    name: rhs_name,
+                    children_indices: rhs_children_indices,
+                } = rhs_node
+                {
+                    let mut res = true;
+
+                    res &= lhs_name == rhs_name;
+                    res &= lhs_children_indices.len() == rhs_children_indices.len();
+
+                    for (i, idx) in lhs_children_indices.iter().enumerate() {
+                        res &= check_ast_equivalence(lhs, rhs, *idx, rhs_children_indices[i]);
+                    }
+
+                    return res;
+                } else {
+                    return false;
+                }
+            }
+            ASTNode::Field {
+                name: lhs_name,
+                field_type: lhs_field_type,
+                register: lhs_register,
+            } => {
+                if let ASTNode::Field {
+                    name: rhs_name,
+                    field_type: rhs_field_type,
+                    register: rhs_register,
+                } = rhs_node
+                {
+                    let mut res = true;
+
+                    res &= lhs_name == rhs_name;
+                    res &= lhs_register == rhs_register;
+
+                    if let FieldType::StructureIdx(lhs_idx) = lhs_field_type {
+                        if let FieldType::StructureIdx(rhs_idx) = rhs_field_type {
+                            res &= check_ast_equivalence(lhs, rhs, *lhs_idx, *rhs_idx);
+                        } else {
+                            return false;
+                        }
+                    } else {
+                        res &= lhs_field_type == rhs_field_type;
+                    }
+
+                    return res;
+                } else {
+                    return false;
+                }
+            }
+            _ => unreachable!("Node has to be either a field or a structure."),
         }
     }
 }
