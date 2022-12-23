@@ -6,14 +6,16 @@ use crate::camera::Camera;
 use crate::math::fft::Complex;
 use crate::math::lin_alg::{Mat4, Vec2, Vec3, Vec4};
 use crate::math::rand;
-use crate::{imgui_backend, vk_helpers::*};
+use crate::{
+    imgui_backend,
+    vk_helpers::{self, *},
+};
 
 use ash::extensions::{
     ext::DebugUtils,
     khr::{Surface, Swapchain},
     nv::MeshShader,
 };
-use ash::version::{DeviceV1_0, InstanceV1_0};
 use ash::{vk, Device, Instance};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
@@ -76,8 +78,9 @@ const OCEAN_PATCH_DIM_RECIPROCAL: f32 = 1.0 / (OCEAN_PATCH_DIM as f32);
 const L: f32 = 20.0;
 const TWO_PI: f32 = std::f32::consts::PI * 2.0;
 
-const OCEAN_SHADER_SRC: &str = include_str!(".././assets/shaders/ocean.comp.mesh.frag.hlsl");
-const SKYBOX_SHADER_SRC: &str = include_str!(".././assets/shaders/skybox.mesh.frag.hlsl");
+const OCEAN_GRID_SHADER_SRC: &str = include_str!(".././assets/shaders/ocean_grid.comp.hlsl");
+const OCEAN_SHADER_SRC: &str = include_str!(".././assets/shaders/ocean.comp.vert.frag.hlsl");
+const SKYBOX_SHADER_SRC: &str = include_str!(".././assets/shaders/skybox.vert.frag.hlsl");
 
 struct FrameData {
     present_semaphore: vk::Semaphore,
@@ -136,8 +139,6 @@ pub struct VkEngine {
     materials: HashMap<String, Material>,
     camera: Camera,
     last_timestamp: std::time::Instant,
-    mesh_shader_data: MeshShaderData,
-    mesh_shader: MeshShader,
     compute_pipelines: Vec<vk::Pipeline>,
     start: std::time::Instant,
     textures: HashMap<String, VkTexture>,
@@ -145,6 +146,10 @@ pub struct VkEngine {
     imgui_renderer: imgui_backend::Renderer,
     time_factor: f32,
     choppiness: f32,
+    waves_descriptor_set: vk::DescriptorSet,
+    waves_descriptor_set_layout: vk::DescriptorSetLayout,
+    ocean_grid_vertex_buffer: VkBuffer,
+    ocean_grid_index_buffer: VkBuffer,
 }
 
 impl VkEngine {
@@ -239,7 +244,7 @@ impl VkEngine {
             0,
             1,
             vk::ShaderStageFlags::COMPUTE
-                | vk::ShaderStageFlags::MESH_NV
+                | vk::ShaderStageFlags::VERTEX
                 | vk::ShaderStageFlags::FRAGMENT,
         );
 
@@ -362,6 +367,181 @@ impl VkEngine {
             };
         }
 
+        let ocean_grid_vertex_buffer = create_buffer(
+            &instance,
+            physical_device,
+            &device,
+            (size_of::<Vec4>() * OCEAN_PATCH_DIM * OCEAN_PATCH_DIM) as u64,
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::VERTEX_BUFFER,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        );
+        let ocean_grid_index_buffer = create_buffer(
+            &instance,
+            physical_device,
+            &device,
+            (size_of::<u32>() * (OCEAN_PATCH_DIM - 1) * (OCEAN_PATCH_DIM - 1) * 6) as u64,
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDEX_BUFFER,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        );
+
+        let ocean_grid_vertex_buffer_binding = descriptor_set_layout_binding(
+            vk::DescriptorType::STORAGE_BUFFER,
+            0,
+            1,
+            vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::VERTEX,
+        );
+        let ocean_grid_index_buffer_binding = descriptor_set_layout_binding(
+            vk::DescriptorType::STORAGE_BUFFER,
+            1,
+            1,
+            vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::VERTEX,
+        );
+        let bindings = [
+            ocean_grid_vertex_buffer_binding,
+            ocean_grid_index_buffer_binding,
+        ];
+        let ocean_grid_descriptor_set_layout_create_info =
+            vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
+        let ocean_grid_descriptor_set_layout = unsafe {
+            device
+                .create_descriptor_set_layout(&ocean_grid_descriptor_set_layout_create_info, None)
+                .unwrap()
+        };
+        let descriptor_set_layouts = [ocean_grid_descriptor_set_layout];
+        let ocean_grid_descriptor_set = unsafe {
+            device
+                .allocate_descriptor_sets(
+                    &vk::DescriptorSetAllocateInfo::builder()
+                        .descriptor_pool(descriptor_pool)
+                        .set_layouts(&descriptor_set_layouts),
+                )
+                .unwrap()[0]
+        };
+        let ocean_grid_vertex_buffer_info = vk::DescriptorBufferInfo::builder()
+            .buffer(ocean_grid_vertex_buffer.buffer)
+            .range(vk::WHOLE_SIZE)
+            .build();
+        let buffer_infos = [ocean_grid_vertex_buffer_info];
+        let ocean_grid_vertex_write_descriptor = vk::WriteDescriptorSet::builder()
+            .dst_set(ocean_grid_descriptor_set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(&buffer_infos)
+            .build();
+        let ocean_grid_index_buffer_info = vk::DescriptorBufferInfo::builder()
+            .buffer(ocean_grid_index_buffer.buffer)
+            .range(vk::WHOLE_SIZE)
+            .build();
+        let buffer_infos = [ocean_grid_index_buffer_info];
+        let ocean_grid_index_write_descriptor = vk::WriteDescriptorSet::builder()
+            .dst_set(ocean_grid_descriptor_set)
+            .dst_binding(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(&buffer_infos)
+            .build();
+        let descriptor_writes = [
+            ocean_grid_vertex_write_descriptor,
+            ocean_grid_index_write_descriptor,
+        ];
+        unsafe { device.update_descriptor_sets(&descriptor_writes, &[]) };
+
+        let shader_args = vec!["-spirv", "-Zi", "-Od"];
+        let ocean_dim = OCEAN_PATCH_DIM.to_string();
+        let ocean_dim_exponent = OCEAN_PATCH_DIM_EXPONENT.to_string();
+        let ocean_dim_reciprocal = OCEAN_PATCH_DIM_RECIPROCAL.to_string();
+        let shader_defines = vec![
+            ("OCEAN_DIM", Some(ocean_dim.as_str())),
+            ("OCEAN_DIM_EXPONENT", Some(ocean_dim_exponent.as_str())),
+            ("OCEAN_DIM_RECIPROCAL", Some(ocean_dim_reciprocal.as_str())),
+        ];
+
+        let ocean_grid_shader_module = create_shader_module(
+            &device,
+            OCEAN_GRID_SHADER_SRC,
+            "ocean_grid",
+            "create_ocean_grid",
+            "cs_6_5",
+            &shader_args,
+            &shader_defines,
+        );
+
+        let ocean_grid_compute_pipeline_layout = unsafe {
+            device
+                .create_pipeline_layout(
+                    &vk::PipelineLayoutCreateInfo::builder().set_layouts(&descriptor_set_layouts),
+                    None,
+                )
+                .unwrap()
+        };
+
+        let ocean_grid_compute_pipeline_create_info = vk::ComputePipelineCreateInfo::builder()
+            .stage(pipeline_shader_stage_create_info(
+                vk::ShaderStageFlags::COMPUTE,
+                ocean_grid_shader_module,
+                "create_ocean_grid\0",
+            ))
+            .layout(ocean_grid_compute_pipeline_layout)
+            .build();
+        let compute_infos = [ocean_grid_compute_pipeline_create_info];
+        let ocean_grid_compute_pipeline = unsafe {
+            device
+                .create_compute_pipelines(vk::PipelineCache::null(), &compute_infos, None)
+                .unwrap()[0]
+        };
+
+        unsafe {
+            device.reset_fences(&[frame_data[0].render_fence]).unwrap();
+
+            device
+                .reset_command_buffer(command_buffers[0], vk::CommandBufferResetFlags::from_raw(0))
+                .unwrap();
+
+            let command_buffer_begin_info = vk::CommandBufferBeginInfo::builder()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            device
+                .begin_command_buffer(command_buffers[0], &command_buffer_begin_info)
+                .unwrap();
+
+            device.cmd_bind_pipeline(
+                command_buffers[0],
+                vk::PipelineBindPoint::COMPUTE,
+                ocean_grid_compute_pipeline,
+            );
+            device.cmd_bind_descriptor_sets(
+                command_buffers[0],
+                vk::PipelineBindPoint::COMPUTE,
+                ocean_grid_compute_pipeline_layout,
+                0,
+                &[ocean_grid_descriptor_set],
+                &[],
+            );
+            device.cmd_dispatch(
+                command_buffers[0],
+                (OCEAN_PATCH_DIM / 16) as u32,
+                (OCEAN_PATCH_DIM / 16) as u32,
+                1,
+            );
+            device.end_command_buffer(command_buffers[0]).unwrap();
+            device
+                .queue_submit(
+                    graphics_queue,
+                    &[vk::SubmitInfo::builder()
+                        .command_buffers(&[command_buffers[0]])
+                        .build()],
+                    frame_data[0].render_fence,
+                )
+                .unwrap();
+            device.device_wait_idle().unwrap();
+
+            device.destroy_descriptor_set_layout(ocean_grid_descriptor_set_layout, None);
+            device
+                .free_descriptor_sets(descriptor_pool, &[ocean_grid_descriptor_set])
+                .unwrap();
+            device.destroy_pipeline_layout(ocean_grid_compute_pipeline_layout, None);
+            device.destroy_pipeline(ocean_grid_compute_pipeline, None);
+            device.destroy_shader_module(ocean_grid_shader_module, None);
+        }
+
         let mut waves: Vec<Vec4> =
             vec![unsafe { std::mem::zeroed() }; (OCEAN_PATCH_DIM + 1) * (OCEAN_PATCH_DIM + 1)];
 
@@ -432,7 +612,7 @@ impl VkEngine {
             vk::DescriptorType::STORAGE_IMAGE,
             2,
             1,
-            vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::MESH_NV,
+            vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::VERTEX,
         );
         let displacement_output_input_binding = descriptor_set_layout_binding(
             vk::DescriptorType::STORAGE_IMAGE,
@@ -444,7 +624,7 @@ impl VkEngine {
             vk::DescriptorType::STORAGE_IMAGE,
             4,
             1,
-            vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::MESH_NV,
+            vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::VERTEX,
         );
 
         let bindings = [
@@ -454,15 +634,14 @@ impl VkEngine {
             displacement_output_input_binding,
             displacement_input_output_binding,
         ];
-        let waves_descriptor_layout_info =
+        let waves_descriptor_set_layout_info =
             vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
-        let waves_descriptor_layout = unsafe {
+        let waves_descriptor_set_layout = unsafe {
             device
-                .create_descriptor_set_layout(&waves_descriptor_layout_info, None)
+                .create_descriptor_set_layout(&waves_descriptor_set_layout_info, None)
                 .unwrap()
         };
-
-        let set_layouts = [waves_descriptor_layout];
+        let set_layouts = [waves_descriptor_set_layout];
         let waves_descriptor_allocate_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
             .set_layouts(&set_layouts);
@@ -615,32 +794,22 @@ impl VkEngine {
             )
         };
 
+        let descriptor_set_layouts = [global_set_layout, waves_descriptor_set_layout];
         let ocean_pipeline_layout = unsafe {
             device
                 .create_pipeline_layout(
-                    &vk::PipelineLayoutCreateInfo::builder()
-                        .set_layouts(&[global_set_layout, waves_descriptor_layout]),
+                    &vk::PipelineLayoutCreateInfo::builder().set_layouts(&descriptor_set_layouts),
                     None,
                 )
                 .unwrap()
         };
 
-        let shader_args = vec!["-spirv", "-Zi", "-Od"];
-        let ocean_dim = OCEAN_PATCH_DIM.to_string();
-        let ocean_dim_exponent = OCEAN_PATCH_DIM_EXPONENT.to_string();
-        let ocean_dim_reciprocal = OCEAN_PATCH_DIM_RECIPROCAL.to_string();
-        let shader_defines = vec![
-            ("OCEAN_DIM", Some(ocean_dim.as_str())),
-            ("OCEAN_DIM_EXPONENT", Some(ocean_dim_exponent.as_str())),
-            ("OCEAN_DIM_RECIPROCAL", Some(ocean_dim_reciprocal.as_str())),
-        ];
-
-        let ocean_mesh_shader_module = create_shader_module(
+        let ocean_vert_shader_module = create_shader_module(
             &device,
             OCEAN_SHADER_SRC,
             "ocean",
-            "ms_main",
-            "ms_6_5",
+            "vs_main",
+            "vs_6_5",
             &shader_args,
             &shader_defines,
         );
@@ -655,13 +824,12 @@ impl VkEngine {
         );
 
         let mut pipeline_builder = VkPipelineBuilder::default();
-
         pipeline_builder
             .shader_stages
             .push(pipeline_shader_stage_create_info(
-                vk::ShaderStageFlags::MESH_NV,
-                ocean_mesh_shader_module,
-                "ms_main\0",
+                vk::ShaderStageFlags::VERTEX,
+                ocean_vert_shader_module,
+                "vs_main\0",
             ));
         pipeline_builder
             .shader_stages
@@ -670,9 +838,19 @@ impl VkEngine {
                 ocean_fragment_shader_module,
                 "fs_main\0",
             ));
-
-        pipeline_builder.vertex_input_info = vertex_input_state_create_info();
-
+        pipeline_builder.vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder()
+            .vertex_binding_descriptions(&[vk::VertexInputBindingDescription::builder()
+                .binding(0)
+                .stride(size_of::<Vec4>() as u32)
+                .input_rate(vk::VertexInputRate::VERTEX)
+                .build()])
+            .vertex_attribute_descriptions(&[vk::VertexInputAttributeDescription::builder()
+                .binding(0)
+                .location(0)
+                .format(vk::Format::R32G32B32A32_SFLOAT)
+                .offset(0)
+                .build()])
+            .build();
         pipeline_builder.input_assembly =
             input_assembly_create_info(&vk::PrimitiveTopology::TRIANGLE_LIST);
 
@@ -704,7 +882,7 @@ impl VkEngine {
         let ocean_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
 
         unsafe {
-            device.destroy_shader_module(ocean_mesh_shader_module, None);
+            device.destroy_shader_module(ocean_vert_shader_module, None);
             device.destroy_shader_module(ocean_fragment_shader_module, None);
         };
 
@@ -717,12 +895,12 @@ impl VkEngine {
                 .unwrap()
         };
 
-        let skybox_mesh_shader_module = create_shader_module(
+        let skybox_vertex_shader_module = create_shader_module(
             &device,
             SKYBOX_SHADER_SRC,
             "skybox",
-            "ms_main",
-            "ms_6_5",
+            "vs_main",
+            "vs_6_5",
             &shader_args,
             &vec![],
         );
@@ -740,9 +918,9 @@ impl VkEngine {
         pipeline_builder
             .shader_stages
             .push(pipeline_shader_stage_create_info(
-                vk::ShaderStageFlags::MESH_NV,
-                skybox_mesh_shader_module,
-                "ms_main\0",
+                vk::ShaderStageFlags::VERTEX,
+                skybox_vertex_shader_module,
+                "vs_main\0",
             ));
         pipeline_builder
             .shader_stages
@@ -751,6 +929,9 @@ impl VkEngine {
                 skybox_fragment_shader_module,
                 "fs_main\0",
             ));
+        pipeline_builder.vertex_input_info = vertex_input_state_create_info();
+        pipeline_builder.input_assembly =
+            input_assembly_create_info(&vk::PrimitiveTopology::TRIANGLE_LIST);
 
         pipeline_builder.rasterizer = rasterization_state_create_info(vk::PolygonMode::FILL);
 
@@ -761,7 +942,7 @@ impl VkEngine {
         let skybox_pipeline = pipeline_builder.build_pipline(&render_pass, &device);
 
         unsafe {
-            device.destroy_shader_module(skybox_mesh_shader_module, None);
+            device.destroy_shader_module(skybox_vertex_shader_module, None);
             device.destroy_shader_module(skybox_fragment_shader_module, None);
         };
 
@@ -852,8 +1033,6 @@ impl VkEngine {
             render_pass,
         );
 
-        let mesh_shader = MeshShader::new(&instance, &device);
-
         return VkEngine {
             sdl_context,
             window,
@@ -887,12 +1066,6 @@ impl VkEngine {
             materials: material_map,
             camera,
             last_timestamp: std::time::Instant::now(),
-            mesh_shader_data: MeshShaderData {
-                descriptor_set_layout: waves_descriptor_layout,
-                descriptor_set: waves_descriptor_set,
-                meshlet_count: 1,
-            },
-            mesh_shader,
             compute_pipelines,
             start: std::time::Instant::now(),
             textures,
@@ -900,6 +1073,10 @@ impl VkEngine {
             imgui_renderer,
             time_factor: 1.0,
             choppiness: 0.0,
+            ocean_grid_vertex_buffer,
+            ocean_grid_index_buffer,
+            waves_descriptor_set,
+            waves_descriptor_set_layout,
         };
     }
 
@@ -911,13 +1088,15 @@ impl VkEngine {
         self.device
             .destroy_descriptor_set_layout(self.global_set_layout, None);
         self.device
-            .destroy_descriptor_set_layout(self.mesh_shader_data.descriptor_set_layout, None);
+            .destroy_descriptor_set_layout(self.waves_descriptor_set_layout, None);
         self.device
             .destroy_descriptor_set_layout(self.object_set_layout, None);
         self.device
             .destroy_descriptor_pool(self.descriptor_pool, None);
 
         free_buffer_and_memory(&self.device, &self.scene_data_buffer);
+        free_buffer_and_memory(&self.device, &self.ocean_grid_vertex_buffer);
+        free_buffer_and_memory(&self.device, &self.ocean_grid_index_buffer);
 
         self.device.destroy_command_pool(self.command_pool, None);
 
@@ -1071,10 +1250,7 @@ impl VkEngine {
             vk::PipelineBindPoint::COMPUTE,
             self.materials["ocean"].pipeline_layout,
             0,
-            &[
-                self.global_descriptor_set,
-                self.mesh_shader_data.descriptor_set,
-            ],
+            &[self.global_descriptor_set, self.waves_descriptor_set],
             &[scene_data_offset as u32],
         );
         self.device
@@ -1112,7 +1288,7 @@ impl VkEngine {
         self.device.cmd_pipeline_barrier(
             frame_data.command_buffer,
             vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::PipelineStageFlags::MESH_SHADER_NV,
+            vk::PipelineStageFlags::VERTEX_SHADER,
             vk::DependencyFlags::DEVICE_GROUP,
             &memory_barriers,
             &[],
@@ -1162,8 +1338,7 @@ impl VkEngine {
             &[scene_data_offset as u32],
         );
 
-        self.mesh_shader
-            .cmd_draw_mesh_tasks(frame_data.command_buffer, 1, 0);
+        self.device.cmd_draw(frame_data.command_buffer, 6, 1, 0, 0);
 
         self.device.cmd_bind_pipeline(
             frame_data.command_buffer,
@@ -1176,16 +1351,29 @@ impl VkEngine {
             vk::PipelineBindPoint::GRAPHICS,
             self.materials["ocean"].pipeline_layout,
             0,
-            &[
-                self.global_descriptor_set,
-                self.mesh_shader_data.descriptor_set,
-            ],
+            &[self.global_descriptor_set, self.waves_descriptor_set],
             &[scene_data_offset as u32],
         );
 
-        self.mesh_shader.cmd_draw_mesh_tasks(
+        self.device.cmd_bind_vertex_buffers(
             frame_data.command_buffer,
-            (OCEAN_PATCH_DIM * OCEAN_PATCH_DIM) as u32 / (16 * 16),
+            0,
+            &[self.ocean_grid_vertex_buffer.buffer],
+            &[0],
+        );
+        self.device.cmd_bind_index_buffer(
+            frame_data.command_buffer,
+            self.ocean_grid_index_buffer.buffer,
+            0,
+            vk::IndexType::UINT32,
+        );
+
+        self.device.cmd_draw_indexed(
+            frame_data.command_buffer,
+            ((OCEAN_PATCH_DIM - 1) * (OCEAN_PATCH_DIM - 1)) as u32 * 6,
+            1,
+            0,
+            0,
             0,
         );
 

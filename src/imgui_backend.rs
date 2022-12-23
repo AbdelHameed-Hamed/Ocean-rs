@@ -2,7 +2,6 @@
 
 use crate::vk_helpers::*;
 use ash::{
-    version::DeviceV1_0,
     vk::{self, Handle},
     Device, Instance,
 };

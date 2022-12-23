@@ -1,19 +1,19 @@
-struct OutputVertex {
+struct VSOut {
     float4 pos: SV_Position;
 };
 
-[outputtopology("triangle")]
-[numthreads(1, 1, 1)]
-void ms_main(out vertices OutputVertex out_verts[4], out indices uint3 out_tris[2]) {
-    SetMeshOutputCounts(4, 2);
+VSOut vs_main(uint vertex_idx: SV_VertexID) {
+    float4 quad_verts[] = {
+        float4(-1.0,-1.0, 0.0, 1.0),
+        float4(-1.0, 1.0, 0.0, 1.0),
+        float4( 1.0, 1.0, 0.0, 1.0),
 
-    out_verts[0].pos = float4(-1.0,-1.0, 0.0, 1.0);
-    out_verts[1].pos = float4(-1.0, 1.0, 0.0, 1.0);
-    out_verts[2].pos = float4( 1.0, 1.0, 0.0, 1.0);
-    out_verts[3].pos = float4( 1.0,-1.0, 0.0, 1.0);
+        float4(-1.0,-1.0, 0.0, 1.0),
+        float4( 1.0, 1.0, 0.0, 1.0),
+        float4( 1.0,-1.0, 0.0, 1.0),
+    };
 
-    out_tris[0] = uint3(0, 1, 2);
-    out_tris[1] = uint3(0, 2, 3);
+    return VSOut(quad_verts[vertex_idx]);
 }
 
 cbuffer SceneData: register(b0, space0) {

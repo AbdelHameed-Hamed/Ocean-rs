@@ -111,7 +111,6 @@ pub fn tokenize(shader_src: &str) -> Result<Vec<Token>, String> {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum PrimitiveType {
-    None,
     I8,
     U8,
     I16,
@@ -122,6 +121,7 @@ enum PrimitiveType {
     U64,
     F32,
     F64,
+    None,
 }
 
 #[derive(Debug, Clone, PartialEq)]

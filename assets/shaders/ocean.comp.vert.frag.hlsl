@@ -170,96 +170,48 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
 }
 
 //------------------------------------------------------------------------------------------------------
-// Mesh Shader
+// Vertex Shader
 //------------------------------------------------------------------------------------------------------
 
-// Here we wanna generate a 16x16 ocean patch and figure out where its triangles and verts are gonna lie
-// in world space, this'll generate 256 vertices and 450 triangles.
-// Note: There's gonna be a bit of an overlap, this is necessary to ensure that the topology of the edge
-// triangles is accounted for, i.e., without this overlap you'd have individual disconnected patches
-// instead of one mega connected patch.
-#define PATCH_DIM 16
-#define PATCH_VERTEX_COUNT (PATCH_DIM * PATCH_DIM)
-#define PATCH_TRIANGLE_COUNT ((PATCH_DIM - 1) * (PATCH_DIM - 1) * 2)
+struct VSIn {
+    float4 pos: SV_Position;
+};
 
-struct OutputVertex {
+struct VSOut {
     float4 pos: SV_Position;
     float4 normal: Normal;
 };
 
-[outputtopology("triangle")]
-[numthreads(32, 1, 1)]
-void ms_main(
-    in uint group_thread_id: SV_GroupThreadID,
-    in uint group_id: SV_GroupID,
-    out vertices OutputVertex out_verts[PATCH_VERTEX_COUNT],
-    out indices uint3 out_tris[PATCH_TRIANGLE_COUNT])
-{
-    SetMeshOutputCounts(PATCH_VERTEX_COUNT, PATCH_TRIANGLE_COUNT);
-
-    uint group_idx_x = group_id % (OCEAN_DIM / PATCH_DIM);
-    uint group_idx_z = group_id / (OCEAN_DIM / PATCH_DIM);
-
+VSOut vs_main(VSIn input) {
     const float u = fog_distances.x;
 
-    // We start off by figuring where our vertices and triangles are, transform and register them.
-    uint num_iterations = ceil(PATCH_VERTEX_COUNT / 32.0);
-    for (uint i = 0; i < num_iterations; ++i) {
-        uint vert_idx = group_thread_id * num_iterations + i;
-        if (vert_idx < PATCH_VERTEX_COUNT) {
-            uint x = vert_idx % PATCH_DIM;
-            uint z = vert_idx / PATCH_DIM;
+    VSOut output;
+    output.pos = mul(
+        mul(projection, view),
+        float4(
+            input.pos.x,
+            displacement_input_output[input.pos.xz].y * 8,
+            input.pos.z,
+            1
+        )
+    );
 
-            uint global_x = group_idx_x * PATCH_DIM + x + 1 - group_idx_x;
-            uint global_z = group_idx_z * PATCH_DIM + z + 1 - group_idx_z;
-            uint2 global_idx = {global_z - 1, global_x - 1};
+    float3 normal = float3(
+        -(
+            derivatives_input_output[input.pos.xz].xy /
+            (1 + u * derivatives_input_output[input.pos.xz].zw)
+        ),
+        1
+    ).xzy;
+    output.normal = float4(normalize(normal), 1);
 
-            // Transform the vertex and register it
-            out_verts[vert_idx].pos = mul(
-                mul(projection, view),
-                float4(
-                    global_x + u * displacement_input_output[global_idx].x,
-                    displacement_input_output[global_idx].y * 8,
-                    global_z + u * displacement_input_output[global_idx].z,
-                    1
-                )
-            );
-
-            float3 normal = float3(
-                -(
-                    derivatives_input_output[global_idx].xy /
-                    (1 + u * derivatives_input_output[global_idx].zw)
-                ),
-                1
-            ).xzy;
-            out_verts[vert_idx].normal = float4(normalize(normal), 1);
-
-            // Now figure which quad you represent and register its triangles
-            if (x < (PATCH_DIM - 1) && z < (PATCH_DIM - 1)) {
-                uint quad_idx = z * (PATCH_DIM - 1) + x;
-
-                // Lower triangle, counter clockwise order
-                out_tris[quad_idx * 2] = uint3(
-                    vert_idx,                 // Upper left corner
-                    vert_idx + PATCH_DIM,     // Lower Left corner
-                    vert_idx + PATCH_DIM + 1  // Lower right corner
-                );
-
-                // Upper triangle, counter clockwise order
-                out_tris[quad_idx * 2 + 1] = uint3(
-                    vert_idx,                 // Upper left corner
-                    vert_idx + PATCH_DIM + 1, // Lower right corner
-                    vert_idx + 1              // Upper right corner
-                );
-            }
-        }
-    }
+    return output;
 }
 
 //------------------------------------------------------------------------------------------------------
 // Fragment Shader
 //------------------------------------------------------------------------------------------------------
 
-float4 fs_main(OutputVertex input): SV_Target {
+float4 fs_main(VSOut input): SV_Target {
     return input.normal;
 }

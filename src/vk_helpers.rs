@@ -5,9 +5,7 @@ extern crate sdl2;
 use ash::extensions::{
     ext::DebugUtils,
     khr::{Surface, Swapchain},
-    nv::{DeviceDiagnosticCheckpoints, MeshShader},
 };
-use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0};
 use ash::{vk, vk::Handle, Device, Entry, Instance};
 use hassle_rs::compile_hlsl;
 use sdl2::video::Window;
@@ -54,7 +52,7 @@ pub fn create_instance(window: &Window) -> (Entry, Instance) {
         .collect::<Vec<_>>();
     extension_names_raw.push(DebugUtils::name().as_ptr());
 
-    let entry = unsafe { Entry::new().unwrap() };
+    let entry = unsafe { Entry::load().unwrap() };
 
     let layer_names = [CString::new("VK_LAYER_KHRONOS_validation").unwrap()];
     let layer_names_raw: Vec<*const i8> = layer_names
@@ -67,7 +65,7 @@ pub fn create_instance(window: &Window) -> (Entry, Instance) {
         .application_version(0)
         .engine_name(&application_name)
         .engine_version(0)
-        .api_version(vk::make_version(1, 2, 0));
+        .api_version(vk::API_VERSION_1_0);
 
     let create_info = vk::InstanceCreateInfo::builder()
         .application_info(&app_info)
@@ -122,7 +120,11 @@ pub fn create_debug_layer(
                 | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
                 | vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
         )
-        .message_type(vk::DebugUtilsMessageTypeFlagsEXT::all())
+        .message_type(
+            vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+        )
         .pfn_user_callback(Some(vulkan_debug_callback));
 
     let debug_utils_loader = DebugUtils::new(entry, instance);
@@ -195,8 +197,6 @@ pub fn create_device(
 ) -> Device {
     let device_extensions_names_raw = [
         Swapchain::name().as_ptr(),
-        MeshShader::name().as_ptr(),
-        DeviceDiagnosticCheckpoints::name().as_ptr(),
         vk::KhrShaderNonSemanticInfoFn::name().as_ptr(),
     ];
 
@@ -210,9 +210,6 @@ pub fn create_device(
     let mut features16 = vk::PhysicalDevice16BitStorageFeatures::builder()
         .storage_buffer16_bit_access(true)
         .uniform_and_storage_buffer16_bit_access(true);
-    let mut features_mesh = vk::PhysicalDeviceMeshShaderFeaturesNV::builder()
-        .task_shader(true)
-        .mesh_shader(true);
     let mut features = vk::PhysicalDeviceFeatures2::builder().features(
         vk::PhysicalDeviceFeatures::builder()
             .shader_clip_distance(true)
@@ -225,7 +222,6 @@ pub fn create_device(
         .queue_create_infos(&queue_info)
         .enabled_extension_names(&device_extensions_names_raw)
         .push_next(&mut features16)
-        .push_next(&mut features_mesh)
         .push_next(&mut features);
 
     let device = unsafe {
