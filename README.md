@@ -11,8 +11,6 @@ First, you need to have a few things installed.
 
 To build just use `cargo build` in the root directory.
 
-Note: Currently it'll only work on machines with Nvidia GPUs starting from the GTX-16XX. This is because mesh shaders are used instead of the typical vertex shaders. This restriction will be fixed soon, howerver.
-
 # ToDo
 
 - Maybe switch out the cooley-tukey FFT with a Stockham implementation?
