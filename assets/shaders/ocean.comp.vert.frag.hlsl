@@ -178,15 +178,16 @@ struct VSIn {
 };
 
 struct VSOut {
-    float4 pos: SV_Position;
+    float4 view_pos: SV_Position;
     float4 normal: Normal;
+    float4 world_pos: Position;
 };
 
 VSOut vs_main(VSIn input) {
     const float u = fog_distances.x;
 
     VSOut output;
-    output.pos = mul(
+    output.view_pos = mul(
         mul(projection, view),
         float4(
             input.pos.x,
@@ -204,6 +205,7 @@ VSOut vs_main(VSIn input) {
         1
     ).xzy;
     output.normal = float4(normalize(normal), 1);
+    output.world_pos = float4(input.pos.x, displacement_input_output[input.pos.xz].y * 8, input.pos.z, 1);
 
     return output;
 }
