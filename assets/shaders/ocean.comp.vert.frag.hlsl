@@ -215,5 +215,21 @@ VSOut vs_main(VSIn input) {
 //------------------------------------------------------------------------------------------------------
 
 float4 fs_main(VSOut input): SV_Target {
-    return input.normal;
+    float3 ocean_color = { 0.1812f, 0.4678f, 0.5520f };
+    float3 light_color = { 1.0, 1.0, 1.0 };
+
+    float ambient_strength = 0.3;
+    float3 ambient_color = ambient_strength * light_color;
+
+    float3 light_dir = normalize(float3(255, 10, 255) - input.world_pos.xyz);
+    float diffuse_strength = max(dot(input.normal.xyz, light_dir), 0);
+    float3 diffuse_color = diffuse_strength * light_color;
+
+    float specular_strength = 0.5;
+    float3 view_dir = normalize(camera_pos - input.world_pos);
+    float3 reflect_dir = reflect(-light_dir, input.normal);
+    float specular_intensity = pow(max(dot(view_dir, reflect_dir), 0), 32);
+    float3 specular_color = specular_strength * specular_intensity * light_color;
+
+    return float4((ambient_color + diffuse_color + specular_color) * ocean_color, 1);
 }
