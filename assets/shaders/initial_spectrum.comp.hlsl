@@ -7,17 +7,22 @@ static const float sigma = 0.074; // Surface tension coeffecient
 static const float rho = 1000; // Density of water
 
 [[vk::push_constant]] struct {
-    float L;        // Ocean patch length
-    float U;        // Wind speed
-    float F;        // Fetch
-    float h;        // Ocean depth
-    uint ocean_dim; // Ocean patch dimension
+    float L;          // Ocean patch length
+    float U;          // Wind speed
+    uint F;           // Fetch
+    float h;          // Ocean depth
+    float wind_angle; // Wind angle with the x axis
+    uint ocean_dim;   // Ocean patch dimension
     uint noise_tex_idx;
     uint waves_spectrum_idx;
 } ocean_params;
 
 Texture2D bindless_textures[]: register(t0, space0);
 RWTexture2D<float4> bindless_rwtextures[]: register(u0, space1);
+
+uint fetch() {
+    return ocean_params.F * 1000;
+}
 
 // Eqn 9
 float omega_value(float k) {
@@ -33,10 +38,10 @@ float omega_derivative(float k) {
 // Eqn 28
 float jonswap(float omega) {
     float gamma = 3.3;
-    float omega_p = 22 * (g * g / (ocean_params.U * ocean_params.F));
+    float omega_p = 22 * (g * g / (ocean_params.U * fetch()));
     float sigma = (omega <= omega_p) ? 0.07 : 0.09;
     float r = exp(-(omega - omega_p) * (omega - omega_p) / (2 * sigma * sigma * omega_p * omega_p));
-    float alpha = 0.076 * pow(ocean_params.U * ocean_params.U / (ocean_params.F * g), 0.22);
+    float alpha = 0.076 * pow(ocean_params.U * ocean_params.U / (fetch() * g), 0.22);
 
     return alpha * g * g / (omega * omega * omega * omega * omega) * pow(gamma, r) *
         exp(-(5 / 4) * (omega_p / omega) * (omega_p / omega) * (omega_p / omega) * (omega_p / omega));
@@ -59,7 +64,7 @@ float tma(float omega) {
 
 // Eqn 38
 float donelan_banner(float omega, float theta) {
-    float omega_p = 22 * (g * g / (ocean_params.U * ocean_params.F));
+    float omega_p = 22 * (g * g / (ocean_params.U * fetch()));
     float beta_s;
     if ((omega_p / omega_p) < 0.95) {
         beta_s = 2.61 * pow(omega / omega_p, 1.3);
@@ -83,7 +88,7 @@ void create_initial_spectrum(uint2 thread_id: SV_DispatchThreadID) {
     if (k_length >= 0.0001f) {
         // Angular frequency
         float omega = omega_value(k_length);
-        float theta = atan2(k.x, k.y);
+        float theta = atan2(k.y, k.x) - ocean_params.wind_angle;
 
         float non_directional_spectrum = tma(omega);
         float directional_spectrum = donelan_banner(omega, theta);

@@ -69,8 +69,9 @@ struct SceneData {
 struct OceanParams {
     L: f32,
     U: f32,
-    F: f32,
+    F: u32,
     h: f32,
+    angle: f32,
     ocean_dim: u32,
     noise_tex_idx: u32,
     waves_spectrum_idx: u32,
@@ -754,7 +755,7 @@ impl VkEngine {
             .push_constant_ranges(&[vk::PushConstantRange::builder()
                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 .offset(0)
-                .size(28)
+                .size(size_of::<OceanParams>() as u32)
                 .build()])
             .build();
         let initial_spectrum_creation_layout = unsafe {
@@ -1221,8 +1222,9 @@ impl VkEngine {
             ocean_params: OceanParams {
                 L: 100.0,
                 U: 17.0,
-                F: 300.0 * 1000.0,
+                F: 300,
                 h: 100.0,
+                angle: 0.0,
                 ocean_dim: OCEAN_PATCH_DIM as u32,
                 noise_tex_idx: 0,
                 waves_spectrum_idx: 0,
@@ -1319,8 +1321,15 @@ impl VkEngine {
         let ui = self.imgui_ctx.frame();
         imgui::Slider::new("Time factor", 0.0, 1.0).build(&ui, &mut self.time_factor);
         imgui::Slider::new("Choppiness", -10.0, 0.0).build(&ui, &mut self.choppiness);
-        imgui::Slider::new("Length", 0.001, 500.0).build(&ui, &mut self.ocean_params.L);
-        imgui::Slider::new("Wind speed", 0.001, 20.0).build(&ui, &mut self.ocean_params.U);
+        imgui::Slider::new("Length (m)", 0.001, 500.0).build(&ui, &mut self.ocean_params.L);
+        imgui::Slider::new("Wind speed (m/s)", 0.001, 100.0).build(&ui, &mut self.ocean_params.U);
+        imgui::Slider::new(
+            "Wind direction",
+            -std::f32::consts::PI,
+            std::f32::consts::PI,
+        )
+        .build(&ui, &mut self.ocean_params.angle);
+        imgui::Slider::new("Fetch (Km)", 50, 1250).build(&ui, &mut self.ocean_params.F);
 
         let frame_index = self.frame_count as usize % FRAME_OVERLAP;
         let frame_data = &self.frame_data[frame_index];
