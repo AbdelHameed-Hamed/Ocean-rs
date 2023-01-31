@@ -879,46 +879,6 @@ impl VkEngine {
                 .unwrap()[0]
         };
 
-        // let waves_size = (size_of::<Vec4>() * waves.len()) as u64;
-        // let staging_buffer = create_buffer(
-        //     &instance,
-        //     physical_device,
-        //     &device,
-        //     waves_size,
-        //     vk::BufferUsageFlags::TRANSFER_SRC,
-        //     vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        // );
-
-        // unsafe {
-        //     let data_ptr = device
-        //         .map_memory(
-        //             staging_buffer.buffer_memory,
-        //             0,
-        //             waves_size,
-        //             vk::MemoryMapFlags::empty(),
-        //         )
-        //         .unwrap() as *mut Vec4;
-        //     data_ptr.copy_from_nonoverlapping(waves.as_ptr(), waves.len());
-        //     device.unmap_memory(staging_buffer.buffer_memory);
-        // }
-
-        // let waves_extent = vk::Extent3D {
-        //     width: (OCEAN_PATCH_DIM + 1) as u32,
-        //     height: (OCEAN_PATCH_DIM + 1) as u32,
-        //     depth: 1,
-        // };
-        // let waves_info = add_texture(
-        //     &instance,
-        //     physical_device,
-        //     &device,
-        //     command_pool,
-        //     graphics_queue,
-        //     waves_extent,
-        //     vk::Format::R32G32B32A32_SFLOAT,
-        //     Some(staging_buffer),
-        //     "waves",
-        //     &mut textures,
-        // );
         let infos = [waves_info];
         let waves_set_write = vk::WriteDescriptorSet::builder()
             .dst_set(waves_descriptor_set)
