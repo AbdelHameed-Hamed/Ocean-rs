@@ -2,7 +2,7 @@
 // Ocean Surface Generation and Rendering - Thomas Gamper
 // https://www.cg.tuwien.ac.at/research/publications/2018/GAMPER-2018-OSG/GAMPER-2018-OSG-thesis.pdf
 
-#define TWO_PI 6.283185307179586476925286766559
+static const float TWO_PI = 6.283185307179586476925286766559;
 
 float2 complex_mul(float2 lhs, float2 rhs) {
     float2 result = {
@@ -61,6 +61,14 @@ RWTexture2D<float4> derivatives_input_output: register(u4, space1);
 groupshared float4 displacement_pingpong[2][OCEAN_DIM];
 groupshared float4 derivatives_pingpong[2][OCEAN_DIM];
 
+static const float g = 9.81;
+static const float sigma = 0.074; // Surface tension coeffecient
+static const float rho = 1000; // Density of water
+
+float omega_value(float k) {
+    return sqrt((g * k + sigma / rho * k * k * k) * tanh(min(k * 150, 30)));
+}
+
 [numthreads(OCEAN_DIM, 1, 1)]
 void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
     #ifdef CALCULATE_SPECTRUM_AND_ROW_IFFT
@@ -70,7 +78,7 @@ void cs_main(uint x: SV_GroupThreadID, uint z: SV_GroupID) {
 
         float2 k = waves[loc1].zw;
 
-        float w_k_t = sqrt(9.81 * length(k)) * fog_distances.z;
+        float w_k_t = omega_value(length(k)) * fog_distances.z;
 
         // Calculate tilde_h at time t
         float2 tilde_h1 = waves[loc1].xy;

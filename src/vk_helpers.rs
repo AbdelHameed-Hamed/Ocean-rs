@@ -65,7 +65,7 @@ pub fn create_instance(window: &Window) -> (Entry, Instance) {
         .application_version(0)
         .engine_name(&application_name)
         .engine_version(0)
-        .api_version(vk::API_VERSION_1_0);
+        .api_version(vk::API_VERSION_1_2);
 
     let create_info = vk::InstanceCreateInfo::builder()
         .application_info(&app_info)
@@ -210,6 +210,15 @@ pub fn create_device(
     let mut features16 = vk::PhysicalDevice16BitStorageFeatures::builder()
         .storage_buffer16_bit_access(true)
         .uniform_and_storage_buffer16_bit_access(true);
+    let mut indexing_features = vk::PhysicalDeviceDescriptorIndexingFeatures::builder()
+        .descriptor_binding_partially_bound(true)
+        .runtime_descriptor_array(true)
+        .descriptor_binding_sampled_image_update_after_bind(true)
+        .descriptor_binding_uniform_buffer_update_after_bind(true)
+        .descriptor_binding_storage_image_update_after_bind(true)
+        .descriptor_binding_storage_buffer_update_after_bind(true)
+        .descriptor_binding_variable_descriptor_count(true)
+        .descriptor_binding_update_unused_while_pending(true);
     let mut features = vk::PhysicalDeviceFeatures2::builder().features(
         vk::PhysicalDeviceFeatures::builder()
             .shader_clip_distance(true)
@@ -221,6 +230,7 @@ pub fn create_device(
     let device_create_info = vk::DeviceCreateInfo::builder()
         .queue_create_infos(&queue_info)
         .enabled_extension_names(&device_extensions_names_raw)
+        .push_next(&mut indexing_features)
         .push_next(&mut features16)
         .push_next(&mut features);
 
