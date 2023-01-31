@@ -85,8 +85,6 @@ const OCEAN_PATCH_DIM: usize = 512;
 // Only works for powers of 2
 const OCEAN_PATCH_DIM_EXPONENT: u8 = (OCEAN_PATCH_DIM - 1).count_ones() as u8;
 const OCEAN_PATCH_DIM_RECIPROCAL: f32 = 1.0 / (OCEAN_PATCH_DIM as f32);
-const L: f32 = 20.0;
-const TWO_PI: f32 = std::f32::consts::PI * 2.0;
 const MAX_BINDLESS_COUNT: u32 = 2048;
 
 const OCEAN_GRID_SHADER_SRC: &str = include_str!(".././assets/shaders/ocean_grid.comp.hlsl");
@@ -773,57 +771,6 @@ impl VkEngine {
             .layout(initial_spectrum_creation_layout)
             .build();
 
-        let mut waves: Vec<Vec4> =
-            vec![unsafe { std::mem::zeroed() }; (OCEAN_PATCH_DIM + 1) * (OCEAN_PATCH_DIM + 1)];
-
-        let amplitude = 0.45 * 1e-3;
-        let wind_speed = 6.5;
-        let wind_direction = Vec2 { x: -0.4, y: -0.9 };
-        let l = wind_speed * wind_speed / 9.81;
-        let l_minor_waves = l / 1000.0;
-
-        for i in 0..=OCEAN_PATCH_DIM {
-            for j in 0..=OCEAN_PATCH_DIM {
-                let k = Vec2 {
-                    x: TWO_PI * (start - j as f32) / L,
-                    y: TWO_PI * (start - i as f32) / L,
-                };
-                let k_2 = k.length_sqr();
-                let k_dot_w = Vec2::dot(k, wind_direction.normal());
-
-                let b = if k.x != 0.0 || k.y != 0.0 {
-                    f32::exp(-1.0 / (k_2 * l * l)) / (k_2 * k_2 * k_2)
-                } else {
-                    0.0
-                };
-                let c = f32::powi(k_dot_w, 2);
-
-                let mut phillips_k = amplitude * b * c;
-                if k_dot_w < 0.0 {
-                    phillips_k *= 0.07;
-                }
-                phillips_k *= f32::exp(-k_2 * l_minor_waves * l_minor_waves);
-
-                let h_zero_k = f32::sqrt(phillips_k) * std::f32::consts::FRAC_1_SQRT_2;
-
-                let (u1, u2) = (
-                    pcg_rng.next() as f32 / u32::MAX as f32,
-                    pcg_rng.next() as f32 / u32::MAX as f32,
-                );
-                let (r1, r2) = rand::box_muller_rng(u1, u2);
-
-                let tilde_h_zero = Complex { real: r1, imag: r2 } * h_zero_k;
-
-                let idx = i * (OCEAN_PATCH_DIM + 1) + j;
-                waves[idx] = Vec4 {
-                    x: tilde_h_zero.real,
-                    y: tilde_h_zero.imag,
-                    z: k.x,
-                    w: k.y,
-                };
-            }
-        }
-
         let waves_binding = descriptor_set_layout_binding(
             vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             0,
@@ -1372,8 +1319,8 @@ impl VkEngine {
         let ui = self.imgui_ctx.frame();
         imgui::Slider::new("Time factor", 0.0, 1.0).build(&ui, &mut self.time_factor);
         imgui::Slider::new("Choppiness", -10.0, 0.0).build(&ui, &mut self.choppiness);
-        imgui::Slider::new("Length", 0.0, 500.0).build(&ui, &mut self.ocean_params.L);
-        imgui::Slider::new("Wind speed", 0.0, 20.0).build(&ui, &mut self.ocean_params.U);
+        imgui::Slider::new("Length", 0.001, 500.0).build(&ui, &mut self.ocean_params.L);
+        imgui::Slider::new("Wind speed", 0.001, 20.0).build(&ui, &mut self.ocean_params.U);
 
         let frame_index = self.frame_count as usize % FRAME_OVERLAP;
         let frame_data = &self.frame_data[frame_index];
@@ -1425,7 +1372,7 @@ impl VkEngine {
         scene_data.projection = projection;
         scene_data.camera_pos = Vec4::from_vec3(self.camera.pos, 0.0);
         scene_data.fog_distances.x = self.choppiness;
-        scene_data.fog_distances.y = L;
+        scene_data.fog_distances.y = self.ocean_params.L;
         scene_data.fog_distances.z = std::time::Instant::now()
             .duration_since(self.start)
             .as_secs_f32()
