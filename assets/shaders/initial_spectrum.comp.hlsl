@@ -12,7 +12,7 @@ static const float rho = 1000; // Density of water
     float F;        // Fetch
     float h;        // Ocean depth
     uint ocean_dim; // Ocean patch dimension
-    uint noise_and_wavenumber_tex_idx;
+    uint noise_tex_idx;
     uint waves_spectrum_idx;
 } ocean_params;
 
@@ -38,9 +38,8 @@ float jonswap(float omega) {
     float r = exp(-(omega - omega_p) * (omega - omega_p) / (2 * sigma * sigma * omega_p * omega_p));
     float alpha = 0.076 * pow(ocean_params.U * ocean_params.U / (ocean_params.F * g), 0.22);
 
-    return alpha * g * g / (omega * omega * omega * omega * omega) *
-        exp(-(5 / 4) * (omega_p / omega) * (omega_p / omega) * (omega_p / omega) * (omega_p / omega)) *
-        gamma * gamma * gamma * gamma;
+    return alpha * g * g / (omega * omega * omega * omega * omega) * pow(gamma, r) *
+        exp(-(5 / 4) * (omega_p / omega) * (omega_p / omega) * (omega_p / omega) * (omega_p / omega));
 }
 
 // Eqn 30
@@ -76,23 +75,27 @@ float donelan_banner(float omega, float theta) {
 
 [numthreads(8, 8, 1)]
 void create_initial_spectrum(uint2 thread_id: SV_DispatchThreadID) {
-    float4 noise_and_wavenumber = bindless_textures[ocean_params.noise_and_wavenumber_tex_idx][thread_id];
     // Wavenumber
-    float2 k = noise_and_wavenumber.zw;
-    float k_length = length(k);
     float delta_k = TWO_PI / ocean_params.L;
-    // Angular frequency
-    float omega = omega_value(k_length);
-    float theta = atan2(k.x, k.y);
+    float2 k = delta_k * (thread_id - float2(ocean_params.ocean_dim / 2, ocean_params.ocean_dim / 2));
+    float k_length = length(k);
 
-    float non_directional_spectrum = tma(omega);
-    float directional_spectrum = donelan_banner(omega, theta);
-    // Eqn 16
-    float spectrum = non_directional_spectrum * directional_spectrum;
+    if (k_length >= 0.0001f && k_length <= (TWO_PI / 17 * 6.0f)) {
+        // Angular frequency
+        float omega = omega_value(k_length);
+        float theta = atan2(k.x, k.y);
 
-    float2 noise_value = noise_and_wavenumber.xy;
-    float2 h_0k = noise_value * sqrt(2 * spectrum * omega_derivative(k_length) / k_length * delta_k * delta_k);
+        float non_directional_spectrum = tma(omega);
+        float directional_spectrum = donelan_banner(omega, theta);
+        // Eqn 16
+        float spectrum = non_directional_spectrum * directional_spectrum;
 
-    // Eqn 47
-    bindless_rwtextures[ocean_params.waves_spectrum_idx][thread_id] = float4(h_0k.x, h_0k.y, k.x, k.y);
+        float2 noise_value = bindless_textures[ocean_params.noise_tex_idx][thread_id];
+        float2 h_0k = noise_value * sqrt(2 * spectrum * omega_derivative(k_length) / k_length * delta_k * delta_k);
+
+        // Eqn 47
+        bindless_rwtextures[ocean_params.waves_spectrum_idx][thread_id] = float4(h_0k.x, h_0k.y, k.x, k.y);
+    } else {
+        bindless_rwtextures[ocean_params.waves_spectrum_idx][thread_id] = 0.0;
+    }
 }

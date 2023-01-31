@@ -72,7 +72,7 @@ struct OceanParams {
     F: f32,
     h: f32,
     ocean_dim: u32,
-    noise_and_wavenumber_tex_idx: u32,
+    noise_tex_idx: u32,
     waves_spectrum_idx: u32,
 }
 
@@ -85,7 +85,7 @@ const OCEAN_PATCH_DIM: usize = 512;
 // Only works for powers of 2
 const OCEAN_PATCH_DIM_EXPONENT: u8 = (OCEAN_PATCH_DIM - 1).count_ones() as u8;
 const OCEAN_PATCH_DIM_RECIPROCAL: f32 = 1.0 / (OCEAN_PATCH_DIM as f32);
-const L: f32 = 1.0;
+const L: f32 = 20.0;
 const TWO_PI: f32 = std::f32::consts::PI * 2.0;
 const MAX_BINDLESS_COUNT: u32 = 2048;
 
@@ -645,39 +645,29 @@ impl VkEngine {
         let bindless_textures_descriptor_set = descriptor_sets[0];
         let bindless_storage_images_descriptor_set = descriptor_sets[1];
 
-        let mut noise_and_wavenumber: Vec<Vec4> =
+        let mut noise: Vec<Vec2> =
             vec![unsafe { std::mem::zeroed() }; OCEAN_PATCH_DIM * OCEAN_PATCH_DIM];
         let mut pcg_rng = rand::PCGRandom32::new();
         let start = OCEAN_PATCH_DIM as f32 / 2.0;
 
         for i in 0..OCEAN_PATCH_DIM {
             for j in 0..OCEAN_PATCH_DIM {
-                let k = Vec2 {
-                    x: TWO_PI * (start - j as f32) / L,
-                    y: TWO_PI * (start - i as f32) / L,
-                };
-
                 let (u1, u2) = (
                     pcg_rng.next() as f32 / u32::MAX as f32,
                     pcg_rng.next() as f32 / u32::MAX as f32,
                 );
                 let (r1, r2) = rand::box_muller_rng(u1, u2);
 
-                noise_and_wavenumber[i * OCEAN_PATCH_DIM + j] = Vec4 {
-                    x: r1,
-                    y: r2,
-                    z: k.x,
-                    w: k.y,
-                };
+                noise[i * OCEAN_PATCH_DIM + j] = Vec2 { x: r1, y: r2 };
             }
         }
 
-        let noise_and_wavenumber_size = (size_of::<Vec4>() * noise_and_wavenumber.len()) as u64;
+        let noise_size = (size_of::<Vec2>() * noise.len()) as u64;
         let staging_buffer = create_buffer(
             &instance,
             physical_device,
             &device,
-            noise_and_wavenumber_size,
+            noise_size,
             vk::BufferUsageFlags::TRANSFER_SRC,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         );
@@ -687,42 +677,39 @@ impl VkEngine {
                 .map_memory(
                     staging_buffer.buffer_memory,
                     0,
-                    noise_and_wavenumber_size,
+                    noise_size,
                     vk::MemoryMapFlags::empty(),
                 )
-                .unwrap() as *mut Vec4;
-            data_ptr.copy_from_nonoverlapping(
-                noise_and_wavenumber.as_ptr(),
-                noise_and_wavenumber.len(),
-            );
+                .unwrap() as *mut Vec2;
+            data_ptr.copy_from_nonoverlapping(noise.as_ptr(), noise.len());
             device.unmap_memory(staging_buffer.buffer_memory);
         }
 
         let mut textures = HashMap::<String, VkTexture>::new();
 
-        let noise_and_wavenumber_extent = vk::Extent3D {
+        let noise_extent = vk::Extent3D {
             width: OCEAN_PATCH_DIM as u32,
             height: OCEAN_PATCH_DIM as u32,
             depth: 1,
         };
-        let noise_and_wavenumber_info = add_texture(
+        let noise_info = add_texture(
             &instance,
             physical_device,
             &device,
             command_pool,
             graphics_queue,
-            noise_and_wavenumber_extent,
-            vk::Format::R32G32B32A32_SFLOAT,
+            noise_extent,
+            vk::Format::R32G32_SFLOAT,
             Some(staging_buffer),
-            "noise_and_wavenumber",
+            "noise",
             &mut textures,
         );
-        let noise_and_wavenumber_write = vk::WriteDescriptorSet::builder()
+        let noise_write = vk::WriteDescriptorSet::builder()
             .dst_set(bindless_textures_descriptor_set)
             .dst_binding(0)
             .dst_array_element(0)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(&[noise_and_wavenumber_info])
+            .image_info(&[noise_info])
             .build();
 
         let waves_extent = vk::Extent3D {
@@ -751,7 +738,7 @@ impl VkEngine {
             .build();
 
         unsafe {
-            device.update_descriptor_sets(&[noise_and_wavenumber_write, waves_set_write], &[]);
+            device.update_descriptor_sets(&[noise_write, waves_set_write], &[]);
         };
 
         let initial_spectrum_creation_shader_module = create_shader_module(
@@ -1325,12 +1312,12 @@ impl VkEngine {
             bindless_storage_images_descriptor_set,
             initial_spectrum_creation_layout,
             ocean_params: OceanParams {
-                L: 1.0,
+                L: 20.0,
                 U: 0.5,
                 F: 100000.0,
                 h: 500.0,
                 ocean_dim: OCEAN_PATCH_DIM as u32,
-                noise_and_wavenumber_tex_idx: 0,
+                noise_tex_idx: 0,
                 waves_spectrum_idx: 0,
             },
         };
@@ -1425,7 +1412,7 @@ impl VkEngine {
         let ui = self.imgui_ctx.frame();
         imgui::Slider::new("Time factor", 0.0, 1.0).build(&ui, &mut self.time_factor);
         imgui::Slider::new("Choppiness", -10.0, 0.0).build(&ui, &mut self.choppiness);
-        imgui::Slider::new("Length", 0.0, 20.0).build(&ui, &mut self.ocean_params.L);
+        imgui::Slider::new("Length", 0.0, 500.0).build(&ui, &mut self.ocean_params.L);
         imgui::Slider::new("Wind speed", 0.0, 20.0).build(&ui, &mut self.ocean_params.U);
 
         let frame_index = self.frame_count as usize % FRAME_OVERLAP;
