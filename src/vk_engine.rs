@@ -85,7 +85,7 @@ const OCEAN_PATCH_DIM: usize = 512;
 // Only works for powers of 2
 const OCEAN_PATCH_DIM_EXPONENT: u8 = (OCEAN_PATCH_DIM - 1).count_ones() as u8;
 const OCEAN_PATCH_DIM_RECIPROCAL: f32 = 1.0 / (OCEAN_PATCH_DIM as f32);
-const L: f32 = 20.0;
+const L: f32 = 1.0;
 const TWO_PI: f32 = std::f32::consts::PI * 2.0;
 const MAX_BINDLESS_COUNT: u32 = 2048;
 
@@ -166,6 +166,7 @@ pub struct VkEngine {
     bindless_textures_descriptor_set: vk::DescriptorSet,
     bindless_storage_images_descriptor_set: vk::DescriptorSet,
     initial_spectrum_creation_layout: vk::PipelineLayout,
+    ocean_params: OceanParams,
 }
 
 impl VkEngine {
@@ -891,34 +892,34 @@ impl VkEngine {
                 .unwrap()[0]
         };
 
-        let waves_size = (size_of::<Vec4>() * waves.len()) as u64;
-        let staging_buffer = create_buffer(
-            &instance,
-            physical_device,
-            &device,
-            waves_size,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        );
+        // let waves_size = (size_of::<Vec4>() * waves.len()) as u64;
+        // let staging_buffer = create_buffer(
+        //     &instance,
+        //     physical_device,
+        //     &device,
+        //     waves_size,
+        //     vk::BufferUsageFlags::TRANSFER_SRC,
+        //     vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        // );
 
-        unsafe {
-            let data_ptr = device
-                .map_memory(
-                    staging_buffer.buffer_memory,
-                    0,
-                    waves_size,
-                    vk::MemoryMapFlags::empty(),
-                )
-                .unwrap() as *mut Vec4;
-            data_ptr.copy_from_nonoverlapping(waves.as_ptr(), waves.len());
-            device.unmap_memory(staging_buffer.buffer_memory);
-        }
+        // unsafe {
+        //     let data_ptr = device
+        //         .map_memory(
+        //             staging_buffer.buffer_memory,
+        //             0,
+        //             waves_size,
+        //             vk::MemoryMapFlags::empty(),
+        //         )
+        //         .unwrap() as *mut Vec4;
+        //     data_ptr.copy_from_nonoverlapping(waves.as_ptr(), waves.len());
+        //     device.unmap_memory(staging_buffer.buffer_memory);
+        // }
 
-        let waves_extent = vk::Extent3D {
-            width: (OCEAN_PATCH_DIM + 1) as u32,
-            height: (OCEAN_PATCH_DIM + 1) as u32,
-            depth: 1,
-        };
+        // let waves_extent = vk::Extent3D {
+        //     width: (OCEAN_PATCH_DIM + 1) as u32,
+        //     height: (OCEAN_PATCH_DIM + 1) as u32,
+        //     depth: 1,
+        // };
         // let waves_info = add_texture(
         //     &instance,
         //     physical_device,
@@ -1323,6 +1324,15 @@ impl VkEngine {
             bindless_textures_descriptor_set,
             bindless_storage_images_descriptor_set,
             initial_spectrum_creation_layout,
+            ocean_params: OceanParams {
+                L: 1.0,
+                U: 0.5,
+                F: 100000.0,
+                h: 500.0,
+                ocean_dim: OCEAN_PATCH_DIM as u32,
+                noise_and_wavenumber_tex_idx: 0,
+                waves_spectrum_idx: 0,
+            },
         };
     }
 
@@ -1415,6 +1425,8 @@ impl VkEngine {
         let ui = self.imgui_ctx.frame();
         imgui::Slider::new("Time factor", 0.0, 1.0).build(&ui, &mut self.time_factor);
         imgui::Slider::new("Choppiness", -10.0, 0.0).build(&ui, &mut self.choppiness);
+        imgui::Slider::new("Length", 0.0, 20.0).build(&ui, &mut self.ocean_params.L);
+        imgui::Slider::new("Wind speed", 0.0, 20.0).build(&ui, &mut self.ocean_params.U);
 
         let frame_index = self.frame_count as usize % FRAME_OVERLAP;
         let frame_data = &self.frame_data[frame_index];
@@ -1512,17 +1524,7 @@ impl VkEngine {
             self.initial_spectrum_creation_layout,
             vk::ShaderStageFlags::COMPUTE,
             0,
-            &unsafe {
-                any_as_u8_slice(&OceanParams {
-                    L: 1.0,
-                    U: 0.5,
-                    F: 100000.0,
-                    h: 500.0,
-                    ocean_dim: OCEAN_PATCH_DIM as u32,
-                    noise_and_wavenumber_tex_idx: 0,
-                    waves_spectrum_idx: 0,
-                })
-            },
+            &unsafe { any_as_u8_slice(&self.ocean_params) },
         );
         self.device.cmd_dispatch(
             frame_data.command_buffer,
