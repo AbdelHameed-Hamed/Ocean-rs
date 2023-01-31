@@ -60,13 +60,13 @@ float tma(float omega) {
 // Eqn 38
 float donelan_banner(float omega, float theta) {
     float omega_p = 22 * (g * g / (ocean_params.U * ocean_params.F));
-    float epsilon = -0.4 + 0.8393 * exp(-0.567 * log((omega / omega_p) * (omega / omega_p)));
     float beta_s;
     if ((omega_p / omega_p) < 0.95) {
         beta_s = 2.61 * pow(omega / omega_p, 1.3);
     } else if ((omega / omega_p) < 1.6) {
         beta_s = 2.28 * pow(omega / omega_p, -1.3);
     } else {
+        float epsilon = -0.4 + 0.8393 * exp(-0.567 * log((omega / omega_p) * (omega / omega_p)));
         beta_s = pow(10, epsilon);
     }
 
@@ -80,7 +80,7 @@ void create_initial_spectrum(uint2 thread_id: SV_DispatchThreadID) {
     float2 k = delta_k * (thread_id - float2(ocean_params.ocean_dim / 2, ocean_params.ocean_dim / 2));
     float k_length = length(k);
 
-    if (k_length >= 0.0001f && k_length <= (TWO_PI / 17 * 6.0f)) {
+    if (k_length >= 0.0001f) {
         // Angular frequency
         float omega = omega_value(k_length);
         float theta = atan2(k.x, k.y);

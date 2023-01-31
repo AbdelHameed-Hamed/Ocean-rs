@@ -199,7 +199,7 @@ VSOut vs_main(VSIn input) {
         mul(projection, view),
         float4(
             input.pos.x,
-            displacement_input_output[input.pos.xz].y * 8,
+            displacement_input_output[input.pos.xz].y,
             input.pos.z,
             1
         )
