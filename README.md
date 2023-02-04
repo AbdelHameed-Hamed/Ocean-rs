@@ -13,18 +13,18 @@ To build just use `cargo build` in the root directory.
 
 # ToDo
 
-- Maybe switch out the cooley-tukey FFT with a Stockham implementation?
-- Refactor SceneData cbuffer in shaders.
-- Smooth the camera movement.
-- Add better camera controls (e.g., only rotate when you're holding Ctrl + mouse movement).
-- Figure out why the fragment shader outputs very pixelated(?) colors and fix that.
-- Support window resizing + fullscreen.
-- Support shader hot-reloading.
-- Check Empirical directional wave spectra for computer graphics for better, more realistic waves.
-- Add realistic shading of the ocean surface.
-- Perhaps replace the simple skybox with something that simulates the sky based on Rayleigh scattering?
-- Perhaps add a way to specify what the pipeline will look like from the shaders?
-- Maybe do physical camera as is done [here](https://bitsquid.blogspot.com/2017/09/physical-cameras-in-stingray.html)?
+- [ ] Maybe switch out the cooley-tukey FFT with a Stockham implementation?
+- [ ] Refactor SceneData cbuffer in shaders.
+- [ ] Smooth the camera movement.
+- [ ] Add better camera controls (e.g., only rotate when you're holding Ctrl + mouse movement).
+- [ ] Figure out why the fragment shader outputs very pixelated(?) colors and fix that.
+- [ ] Support window resizing + fullscreen.
+- [ ] Support shader hot-reloading.
+- [x] Check Empirical directional wave spectra for computer graphics for better, more realistic waves.
+- [ ] Add realistic shading of the ocean surface.
+- [ ] Perhaps replace the simple skybox with something that simulates the sky based on Rayleigh scattering?
+- [ ] Perhaps add a way to specify what the pipeline will look like from the shaders?
+- ~[ ] Maybe do physical camera as is done [here](https://bitsquid.blogspot.com/2017/09/physical-cameras-in-stingray.html)?~
 
 # References
 
