@@ -3,7 +3,6 @@ extern crate imgui;
 extern crate sdl2;
 
 use crate::camera::Camera;
-use crate::math::fft::Complex;
 use crate::math::lin_alg::{Mat4, Vec2, Vec3, Vec4};
 use crate::math::rand;
 use crate::{imgui_backend, vk_helpers::*};
@@ -72,6 +71,7 @@ struct OceanParams {
     F: u32,
     h: f32,
     angle: f32,
+    swell: f32,
     ocean_dim: u32,
     noise_tex_idx: u32,
     waves_spectrum_idx: u32,
@@ -1225,6 +1225,7 @@ impl VkEngine {
                 F: 300,
                 h: 100.0,
                 angle: 0.0,
+                swell: 0.0,
                 ocean_dim: OCEAN_PATCH_DIM as u32,
                 noise_tex_idx: 0,
                 waves_spectrum_idx: 0,
@@ -1330,6 +1331,7 @@ impl VkEngine {
         )
         .build(&ui, &mut self.ocean_params.angle);
         imgui::Slider::new("Fetch (Km)", 50, 1250).build(&ui, &mut self.ocean_params.F);
+        imgui::Slider::new("Swell", 0.0, 1.0).build(&ui, &mut self.ocean_params.swell);
 
         let frame_index = self.frame_count as usize % FRAME_OVERLAP;
         let frame_data = &self.frame_data[frame_index];

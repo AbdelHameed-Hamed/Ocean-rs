@@ -12,6 +12,7 @@ static const float rho = 1000; // Density of water
     uint F;           // Fetch
     float h;          // Ocean depth
     float wind_angle; // Wind angle with the x axis
+    float swell;
     uint ocean_dim;   // Ocean patch dimension
     uint noise_tex_idx;
     uint waves_spectrum_idx;
@@ -35,10 +36,14 @@ float omega_derivative(float k) {
         omega_value(k);
 }
 
+float omega_peak(float omega) {
+    return 22 * (g * g / (ocean_params.U * fetch()));
+}
+
 // Eqn 28
 float jonswap(float omega) {
     float gamma = 3.3;
-    float omega_p = 22 * (g * g / (ocean_params.U * fetch()));
+    float omega_p = omega_peak(omega);
     float sigma = (omega <= omega_p) ? 0.07 : 0.09;
     float r = exp(-(omega - omega_p) * (omega - omega_p) / (2 * sigma * sigma * omega_p * omega_p));
     float alpha = 0.076 * pow(ocean_params.U * ocean_params.U / (fetch() * g), 0.22);
@@ -64,7 +69,7 @@ float tma(float omega) {
 
 // Eqn 38
 float donelan_banner(float omega, float theta) {
-    float omega_p = 22 * (g * g / (ocean_params.U * fetch()));
+    float omega_p = omega_peak(omega);
     float beta_s;
     if ((omega_p / omega_p) < 0.95) {
         beta_s = 2.61 * pow(omega / omega_p, 1.3);
@@ -76,6 +81,33 @@ float donelan_banner(float omega, float theta) {
     }
 
     return beta_s / (2 * tanh(PI * beta_s) * cosh(beta_s * theta) * cosh(beta_s * theta));
+}
+
+// Eqn 45
+float s_xi(float omega) {
+    return 16 * tanh(omega_peak(omega) / omega) * ocean_params.swell * ocean_params.swell;
+}
+
+// Eqn 44
+float swell_factor(float omega, float theta) {
+    return pow(abs(cos(theta / 2)), 2 * s_xi(omega));
+}
+
+// Eqn 43
+float normalization_factor(float omega) {
+    float denominator = 0;
+    float step_size = 0.1;
+
+    for (float i = -PI / 2; i <= PI / 2; i += step_size) {
+        denominator += donelan_banner(omega, i) * swell_factor(omega, i);
+    }
+
+    return 1 / (denominator * step_size);
+}
+
+// Eqn 42
+float directional_spreding(float omega, float theta) {
+    return donelan_banner(omega, theta) * swell_factor(omega, theta) * normalization_factor(omega);
 }
 
 [numthreads(8, 8, 1)]
@@ -91,7 +123,7 @@ void create_initial_spectrum(uint2 thread_id: SV_DispatchThreadID) {
         float theta = atan2(k.y, k.x) - ocean_params.wind_angle;
 
         float non_directional_spectrum = tma(omega);
-        float directional_spectrum = donelan_banner(omega, theta);
+        float directional_spectrum = directional_spreding(omega, theta);
         // Eqn 16
         float spectrum = non_directional_spectrum * directional_spectrum;
 
