@@ -1638,6 +1638,12 @@ impl VkEngine {
                 .update_delta_time(current_timestamp - self.last_timestamp);
             self.last_timestamp = current_timestamp;
 
+            let pressed_keys: Vec<Keycode> = event_pump
+                .keyboard_state()
+                .pressed_scancodes()
+                .filter_map(Keycode::from_scancode)
+                .collect();
+
             for event in event_pump.poll_iter() {
                 match event {
                     Event::Quit { .. }
@@ -1660,11 +1666,13 @@ impl VkEngine {
                     } => self.camera.rotate_camera = false,
 
                     _ => {
-                        self.camera.handle_event(&event, delta_time);
+                        self.camera.handle_mouse_event(&event);
                         imgui_backend::handle_event(self.imgui_ctx.io_mut(), &event);
                     }
                 }
             }
+
+            self.camera.handle_keyboard_events(pressed_keys, delta_time);
 
             unsafe {
                 self.draw();

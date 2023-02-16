@@ -1,7 +1,6 @@
 use crate::math::lin_alg::Vec3;
 
-use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
+use sdl2::{event::Event, keyboard::Keycode};
 
 #[derive(Debug)]
 pub struct Camera {
@@ -15,7 +14,7 @@ pub struct Camera {
 }
 
 impl Camera {
-    pub fn handle_event(&mut self, event: &sdl2::event::Event, delta_time: f32) {
+    pub fn handle_mouse_event(&mut self, event: &sdl2::event::Event) {
         match *event {
             Event::MouseMotion {
                 xrel: x, yrel: y, ..
@@ -37,25 +36,21 @@ impl Camera {
             Event::MouseWheel { y: scroll_y, .. } => {
                 self.fov = (self.fov - scroll_y as f32).clamp(1.0, 60.0);
             }
-            Event::KeyDown {
-                keycode: Some(pressed_key),
-                ..
-            } => {
-                let camera_speed = 100.0 * delta_time;
-                if pressed_key == Keycode::W {
-                    self.pos += self.front * camera_speed;
-                }
-                if pressed_key == Keycode::S {
-                    self.pos -= self.front * camera_speed;
-                }
-                if pressed_key == Keycode::A {
-                    self.pos -= Vec3::cross(self.front, self.up).normal() * camera_speed;
-                }
-                if pressed_key == Keycode::D {
-                    self.pos += Vec3::cross(self.front, self.up).normal() * camera_speed;
-                }
-            }
             _ => {}
+        }
+    }
+
+    pub fn handle_keyboard_events(&mut self, pressed_keys: Vec<Keycode>, delta_time: f32) {
+        let camera_speed = 100.0 * delta_time;
+
+        for pressed_key in pressed_keys {
+            match pressed_key {
+                Keycode::W => self.pos += self.front * camera_speed,
+                Keycode::S => self.pos -= self.front * camera_speed,
+                Keycode::A => self.pos -= Vec3::cross(self.front, self.up).normal() * camera_speed,
+                Keycode::D => self.pos += Vec3::cross(self.front, self.up).normal() * camera_speed,
+                _ => (),
+            }
         }
     }
 }
